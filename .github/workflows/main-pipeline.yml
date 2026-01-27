@@ -1,0 +1,415 @@
+name: CI/CD Master Pipeline (Blue/Green)
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 6:00 PM EST is approx 23:00 UTC
+    - cron: '0 23 * * *'
+
+permissions:
+  contents: write  # REQUIRED: To commit error logs and create releases
+  issues: write    # To create issues/comments if needed
+  actions: read    # To download artifacts
+
+jobs:
+  # ====================================================
+  # JOB 1: PROVISION BACKEND & DETECT STACK
+  # ====================================================
+  provision-stack:
+    name: Provision Stack & Backend
+    runs-on: ubuntu-latest
+    outputs:
+      fe_provider: ${{ steps.parse.outputs.fe_provider }}
+      project_name: ${{ steps.parse.outputs.project_name }}
+      # NOTE: sb_url and sb_anon are REMOVED. We use the artifact instead.
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Parse stack.json
+        id: parse
+        run: |
+          PROVIDER=$(jq -r '.frontend.provider' setup/stack.json)
+          PROJECT=$(jq -r '.project_name' setup/stack.json)
+          echo "fe_provider=$PROVIDER" >> $GITHUB_OUTPUT
+          echo "project_name=$PROJECT" >> $GITHUB_OUTPUT
+
+      - name: Run Backend Deployment Script
+        id: deploy-backend
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          chmod +x scripts/deploy-backend-supabase.sh
+          ./scripts/deploy-backend-supabase.sh
+
+      # --- FIX: FIND AND MOVE THE .ENV FILE ---
+      - name: Locate and Move .env
+        run: |
+          echo "🔍 Searching for .env file..."
+          # Find .env file (ignoring node_modules)
+          FOUND_PATH=$(find . -name ".env" -not -path "*/node_modules/*" | head -n 1)
+          
+          if [ -z "$FOUND_PATH" ]; then
+            echo "::error::❌ Could not find .env file anywhere!"
+            exit 1
+          fi
+
+          echo "✅ Found .env at: $FOUND_PATH"
+          
+          # If it's not already in the root, move it here
+          if [ "$FOUND_PATH" != "./.env" ]; then
+            echo "📦 Moving $FOUND_PATH to root..."
+            mv "$FOUND_PATH" .env
+          fi
+
+      # --- UPLOAD STEP (Now guaranteed to work) ---
+      - name: Upload .env as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: supabase-env
+          path: .env
+          include-hidden-files: true
+          retention-days: 1
+
+  # ====================================================
+  # JOB 2: DEPLOY TO TESTING (Green Env)
+  # ====================================================
+  deploy-testing:
+    name: Deploy to Testing
+    needs: provision-stack
+    runs-on: ubuntu-latest
+    outputs:
+      preview_url: ${{ steps.vercel-deploy.outputs.preview_url}}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      # 1. Link & Pull FIRST (Let this run before we touch .env files)
+      - name: Vercel Link & Pull
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.PROJECT_ID }}
+          PROJECT_NAME: ${{ needs.provision-stack.outputs.project_name }}
+        run: |
+          vercel link --yes --token=$VERCEL_TOKEN --scope=$VERCEL_ORG_ID --project=$PROJECT_NAME
+          
+          # This command creates .env.local and deletes our keys if we added them too early
+          vercel pull --yes --environment=preview --token=$VERCEL_TOKEN
+
+      # 2. Download the keys from Job 1
+      - name: Download Env Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: supabase-env
+          path: .
+
+      # 3. APPEND keys to .env.local (Refilling what 'pull' might have deleted)
+      # 3. Clean and Inject Keys (The Fix)
+      # 3. Clean and Inject Keys (The "Nuclear" Fix)
+      - name: Inject Keys
+        id: inject-keys
+        run: |
+          echo "🧹 Cleaning invisible characters from .env..."
+          tr -d '\r' < .env > .env.clean
+          
+          # Load keys so we can output them to GitHub
+          set -a
+          source .env.clean
+          set +a
+          
+          # --- THE FIX IS HERE ---
+          # 1. Prepare the content we want to inject
+          KEYS_CONTENT=$(cat .env.clean)
+          
+          # 2. Append to Root .env.local (Standard Next.js)
+          echo "" >> .env.local
+          echo "$KEYS_CONTENT" >> .env.local
+          
+          # 3. Append to Vercel's Hidden Priority File (CRITICAL)
+          # Vercel pull creates this, and it overrides everything else.
+          # We append our keys to the bottom so they "win".
+          if [ -f .vercel/.env.preview.local ]; then
+             echo "Found Vercel priority file. Overwriting keys..."
+             echo "" >> .vercel/.env.preview.local
+             echo "$KEYS_CONTENT" >> .vercel/.env.preview.local
+          fi
+
+          # 4. Output to GitHub for the CLI steps
+          echo "sb_url=$NEXT_PUBLIC_SUPABASE_URL" >> $GITHUB_OUTPUT
+          echo "sb_anon=$NEXT_PUBLIC_SUPABASE_ANON_KEY" >> $GITHUB_OUTPUT
+
+      # 4. Sync, Build & Deploy
+      - name: Vercel Build & Deploy
+        id: vercel-deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          SB_URL: ${{ steps.inject-keys.outputs.sb_url }}
+          SB_ANON: ${{ steps.inject-keys.outputs.sb_anon }}
+        run: |
+          # Sync to Cloud (so API routes work)
+          vercel env rm NEXT_PUBLIC_SUPABASE_URL preview --token=$VERCEL_TOKEN --yes || true
+          printf "%s\nn\n" "$SB_URL" | vercel env add NEXT_PUBLIC_SUPABASE_URL preview --token=$VERCEL_TOKEN
+
+          vercel env rm NEXT_PUBLIC_SUPABASE_ANON_KEY preview --token=$VERCEL_TOKEN --yes || true
+          printf "%s\nn\n" "$SB_ANON" | vercel env add NEXT_PUBLIC_SUPABASE_ANON_KEY preview --token=$VERCEL_TOKEN
+
+          # Build (Now finds the keys in .env.local because we added them LAST)
+          vercel build --token=$VERCEL_TOKEN
+
+          # Deploy
+          vercel deploy --prebuilt --token=$VERCEL_TOKEN > deployment-url.txt
+          
+          URL=$(cat deployment-url.txt)
+          echo "preview_url=$URL" >> $GITHUB_OUTPUT
+
+      # ---------------------------------------------------------
+      # PATH B: AZURE (Provision & Deploy)
+      # ---------------------------------------------------------
+      - name: Login to Azure
+        if: ${{ needs.provision-stack.outputs.fe_provider == 'azure' }}
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Azure Provision & Deploy
+        if: ${{ needs.provision-stack.outputs.fe_provider == 'azure' }}
+        id: azure-deploy
+        env:
+           APP_NAME: ${{ needs.provision-stack.outputs.project_name }}
+           NEXT_PUBLIC_SUPABASE_URL: ${{ needs.provision-stack.outputs.sb_url }}
+           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ needs.provision-stack.outputs.sb_anon }}
+        run: |
+          RG_NAME="rg-$APP_NAME"
+          
+          # 1. Create Resource Group & Plan (Idempotent)
+          az group create --name $RG_NAME --location eastus
+          az appservice plan create --name "plan-$APP_NAME" --resource-group $RG_NAME --sku B1 --is-linux
+
+          # 2. Create Web App
+          az webapp create --name $APP_NAME --resource-group $RG_NAME --plan "plan-$APP_NAME" --runtime "NODE|18-lts"
+
+          # 3. Set Environment Variables (App Settings)
+          az webapp config appsettings set --name $APP_NAME --resource-group $RG_NAME \
+             --settings NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \
+                        NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+          # 4. Create Staging Slot
+          EXISTS=$(az webapp deployment slot list --name $APP_NAME --resource-group $RG_NAME --query "[?name=='staging'] | length(@)")
+          if [ "$EXISTS" == "0" ]; then
+             az webapp deployment slot create --name $APP_NAME --resource-group $RG_NAME --slot staging
+          fi
+
+          # 5. Build & Deploy
+          npm ci
+          npm run build
+          zip -r release.zip .
+          az webapp deployment source config-zip --resource-group $RG_NAME --name $APP_NAME --slot staging --src release.zip
+          
+          echo "url=https://$APP_NAME-staging.azurewebsites.net" >> $GITHUB_OUTPUT
+
+      # ---------------------------------------------------------
+      # OUTPUT URL
+      # ---------------------------------------------------------
+      - name: Set Testing URL Output
+        id: set-url
+        run: |
+          if [ "${{ needs.provision-stack.outputs.fe_provider }}" == "vercel" ]; then
+            echo "url=${{ steps.vercel-deploy.outputs.preview-url }}" >> $GITHUB_OUTPUT
+          elif [ "${{ needs.provision-stack.outputs.fe_provider }}" == "azure" ]; then
+            echo "url=${{ steps.azure-deploy.outputs.url }}" >> $GITHUB_OUTPUT
+          fi
+
+  # ====================================================
+  # JOB 3: RUN PLAYWRIGHT TESTS
+  # ====================================================
+  validate-deployment:
+    name: Run Validation Tests
+    needs: [provision-stack, deploy-testing]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      image: mcr.microsoft.com/playwright:v1.57.0-jammy
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: npm ci
+
+      # 1. NEW: Download the keys (Restores the missing variables for tests)
+      - name: Download Env Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: supabase-env
+          path: .
+
+      # 2. Load keys so they are available in the 'env' block below
+      - name: Load Dotenv
+        id: load-env
+        run: |
+          # Create a clean version (strip \r) just to be safe
+          tr -d '\r' < .env > .env.clean
+          set -a
+          . ./.env.clean
+          set +a
+          echo "sb_url=$NEXT_PUBLIC_SUPABASE_URL" >> $GITHUB_OUTPUT
+          echo "sb_anon=$NEXT_PUBLIC_SUPABASE_ANON_KEY" >> $GITHUB_OUTPUT
+
+      - name: Run Playwright
+        env:
+          # --- THE FIX FOR "CONNECTION REFUSED" ---
+          # This forces Playwright to ignore 'localhost:3000' and use the live site
+          PLAYWRIGHT_TEST_BASE_URL: ${{ needs.deploy-testing.outputs.preview_url }}
+          
+          # For compatibility, in case your config reads this specifically
+          BASE_URL: ${{ needs.deploy-testing.outputs.preview_url }}
+          
+          HOME: /root
+          
+          # --- THE FIX FOR MISSING KEYS ---
+          # We now pull these from the step above, not the 'needs' block
+          NEXT_PUBLIC_SUPABASE_URL: ${{ steps.load-env.outputs.sb_url }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ steps.load-env.outputs.sb_anon }}
+        run: npx playwright test
+
+      - name: Upload Test Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 30
+
+  # ====================================================
+  # JOB 4: HANDLE FAILURE (Log to Repo)
+  # ====================================================
+  handle-failure:
+    name: Log Failure
+    needs: [validate-deployment, provision-stack]
+    if: failure()
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate Error Log
+        env:
+          STACK: ${{ needs.provision-stack.outputs.fe_provider }}
+        run: |
+          mkdir -p deployment_logs
+          FILE="deployment_logs/failure-$(date +'%Y-%m-%d-%H%M').md"
+          
+          echo "# ❌ Validation Failed" > $FILE
+          echo "**Date:** $(date)" >> $FILE
+          echo "**Stack:** $STACK" >> $FILE
+          echo "" >> $FILE
+          echo "Automated Playwright tests failed. Deployment to PROD has been blocked." >> $FILE
+          echo "See Artifacts for full trace." >> $FILE
+
+      - name: Commit Log
+        run: |
+          git config --global user.name 'GitHub Actions Bot'
+          git config --global user.email 'actions@github.com'
+          git add deployment_logs/
+          # [skip ci] prevents infinite loops
+          git commit -m "chore: add validation failure log [skip ci]"
+          git push
+
+  # ====================================================
+  # JOB 5: PROMOTE TO PROD
+  # ====================================================
+  promote-to-prod:
+    name: Promote to Production
+    needs: [validate-deployment, provision-stack]
+    if: success()
+    runs-on: ubuntu-latest
+    environment: production
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1. NEW: Download the keys (Critical for the build)
+      - name: Download Env Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: supabase-env
+          path: .
+
+      # 2. Create Rollback Tag (Unchanged)
+      - name: Create Backup Tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="prod-backup-$(date +'%Y-%m-%d-%H%M')"
+          gh release create "$TAG" --generate-notes --title "Prod Deployment $TAG"
+
+      # 3. Promote Vercel (FIXED: Injection + Build)
+      - name: Promote Vercel
+        if: ${{ needs.provision-stack.outputs.fe_provider == 'vercel' }}
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.PROJECT_ID }}
+          PROJECT_NAME: ${{ needs.provision-stack.outputs.project_name }}
+        run: |
+          # A. Install CLI
+          npm install --global vercel@latest
+
+          # B. Link & Pull (Creates the priority file with empty keys)
+          vercel link --yes --token=$VERCEL_TOKEN --scope=$VERCEL_ORG_ID --project=$PROJECT_NAME
+          vercel pull --yes --environment=production --token=$VERCEL_TOKEN
+
+          # C. INJECT KEYS (The Fix)
+          echo "🧹 Cleaning and injecting keys into Production..."
+          
+          # Clean invisible characters
+          tr -d '\r' < .env > .env.clean
+          KEYS=$(cat .env.clean)
+          
+          # Inject into Vercel's production config file (This overrides Vercel's empty defaults)
+          echo "" >> .vercel/.env.production.local
+          echo "$KEYS" >> .vercel/.env.production.local
+
+          # Load keys into shell for the sync step below
+          set -a
+          . ./.env.clean
+          set +a
+
+          # D. Sync Keys to Cloud (Production Environment)
+          # We update the cloud vars so API routes work for users
+          vercel env rm NEXT_PUBLIC_SUPABASE_URL production --token=$VERCEL_TOKEN --yes || true
+          printf "%s\nn\n" "$NEXT_PUBLIC_SUPABASE_URL" | vercel env add NEXT_PUBLIC_SUPABASE_URL production --token=$VERCEL_TOKEN
+
+          vercel env rm NEXT_PUBLIC_SUPABASE_ANON_KEY production --token=$VERCEL_TOKEN --yes || true
+          printf "%s\nn\n" "$NEXT_PUBLIC_SUPABASE_ANON_KEY" | vercel env add NEXT_PUBLIC_SUPABASE_ANON_KEY production --token=$VERCEL_TOKEN
+
+          # E. Build & Deploy
+          # Now that keys are injected, this build will succeed
+          vercel build --prod --token=$VERCEL_TOKEN
+          vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN
+
+      # 4. Promote Azure (Unchanged)
+      - name: Promote Azure (Slot Swap)
+        if: ${{ needs.provision-stack.outputs.fe_provider == 'azure' }}
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      
+      - name: Swap Slots
+        if: ${{ needs.provision-stack.outputs.fe_provider == 'azure' }}
+        env:
+           APP_NAME: ${{ needs.provision-stack.outputs.project_name }}
+        run: |
+          RG_NAME="rg-$APP_NAME"
+          az webapp deployment slot swap \
+            --name $APP_NAME \
+            --resource-group $RG_NAME \
+            --slot staging \
+            --target-slot production

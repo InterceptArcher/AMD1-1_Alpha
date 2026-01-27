@@ -1,0 +1,19 @@
+{
+  "project_name": "" ,
+  "owner": "" ,
+  "stack_type": "",
+  "frontend": {
+    "provider": "",
+    "framework": "",
+    "language": ""
+  },
+  "backend": {
+    "provider": "",
+    "language": "",
+    "framework": ""
+  },
+  "database": {
+    "provider": "",
+    "type": ""
+  }
+}

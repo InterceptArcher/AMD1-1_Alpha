@@ -1,0 +1,215 @@
+name: Publish template content to target repo
+on:
+  workflow_dispatch:
+    inputs:
+      target_owner:
+        description: "Owner/org of the target repo (e.g. archer-test)"
+        required: true
+      target_repo:
+        description: "Target repo name only (e.g. import-template-test)"
+        required: true
+      target_branch:
+        description: "Branch to update (default: main)"
+        required: false
+        default: "main"
+      mode:
+        description: "pr or push"
+        required: false
+        default: "pr"
+      pr_title:
+        description: "PR title (if mode=pr)"
+        required: false
+        default: "chore: sync template content"
+
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1) Checkout central repo (source of truth)
+      - name: Checkout source (central repo)
+        uses: actions/checkout@v4
+        with:
+          path: source
+
+      # 2) Create a short-lived GitHub App installation token scoped to BOTH:
+      #    - the central repo (workflow runs here)
+      #    - the target repo (we need to push there)
+      #
+      # IMPORTANT: set CENTRAL_REPO_NAME to the *name only* of this central repo.
+      - name: Create GitHub App token (scoped)
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ inputs.target_owner }}
+          repositories: |
+            CONFIG-archer-template-publisher
+            ${{ inputs.target_repo }}
+
+      # 3) (Optional) Prove the token can see the target repo
+      - name: "Debug: token can access target repo"
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh api repos/${{ inputs.target_owner }}/${{ inputs.target_repo }} --jq '.full_name'
+
+      # 4) Checkout target repo (destination)
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.target_owner }}/${{ inputs.target_repo }}
+          ref: ${{ inputs.target_branch }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: target
+          persist-credentials: true
+
+      # 5) Copy template content into target
+      - name: Copy template content into target
+        run: |
+          set -euo pipefail
+
+          # Ensure parent folders exist
+          mkdir -p target/.github
+
+          # Replace these directories in the target repo
+          rm -rf target/.github/workflows
+          rm -rf target/docs
+          rm -rf target/scripts
+          rm -rf target/setup
+          rm -rf target/features
+          rm -rf target/.devcontainer
+          rm -rf target/deployment_logs
+          rm -rf target/tests
+
+          # Copy directories if present in central repo
+          if [ -d source/.github/workflows ]; then
+            mkdir -p target/.github
+            cp -R source/.github/workflows target/.github/workflows
+            echo "Copied dir: .github/workflows"
+          else
+            echo "WARNING: source/.github/workflows does not exist"
+          fi
+
+          if [ -d source/docs ]; then
+            cp -R source/docs target/docs
+            echo "Copied dir: docs"
+          else
+            echo "WARNING: source/docs does not exist"
+          fi
+
+          if [ -d source/scripts ]; then
+            cp -R source/scripts target/scripts
+            echo "Copied dir: scripts"
+          else
+            echo "WARNING: source/scripts does not exist"
+          fi
+
+          if [ -d source/setup ]; then
+            cp -R source/setup target/setup
+            echo "Copied dir: setup"
+          else
+            echo "WARNING: source/setup does not exist"
+          fi
+
+          # Copy files if present in central repo
+          if [ -f source/.gitignore ]; then
+            cp source/.gitignore target/.gitignore
+            echo "Copied file: .gitignore"
+          else
+            echo "WARNING: source/.gitignore does not exist"
+          fi
+
+          if [ -f source/playright.config.ts ]; then
+            cp source/playright.config.ts target/playright.config.ts
+            echo "Copied file: playright.config.ts"
+          else
+            echo "WARNING: source/playright.config.ts does not exist"
+          fi
+
+          # Prefer CLAUDE.md, but allow claude.md
+          if [ -f source/CLAUDE.md ]; then
+            cp source/CLAUDE.md target/CLAUDE.md
+            echo "Copied file: CLAUDE.md"
+          elif [ -f source/claude.md ]; then
+            cp source/claude.md target/claude.md
+            echo "Copied file: claude.md"
+          else
+            echo "WARNING: source/CLAUDE.md (or source/claude.md) does not exist"
+          fi
+
+          if [ -d source/features ]; then
+            cp -R source/features target/features
+            echo "Copied dir: features"
+          else
+            echo "WARNING: source/features does not exist"
+          fi
+
+          if [ -d source/.devcontainer ]; then
+            cp -R source/.devcontainer target/.devcontainer
+            echo "Copied dir: .devcontainer"
+          else
+            echo "WARNING: source/.devcontainer does not exist"
+          fi
+
+          if [ -d source/deployment_logs ]; then
+            cp -R source/deployment_logs target/deployment_logs
+            echo "Copied dir: deployment_logs"
+          else
+            echo "WARNING: source/deployment_logs does not exist"
+          fi
+
+          if [ -d source/tests ]; then
+            cp -R source/tests target/tests
+            echo "Copied dir: tests"
+          else
+            echo "WARNING: source/tests does not exist"
+          fi
+
+      # 6) Commit if anything changed
+      - name: Commit changes (if any)
+        id: commit
+        run: |
+          set -euo pipefail
+          cd target
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git status --porcelain | grep -q .; then
+            git add -A
+            git commit -m "chore: sync template content from central repo"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No changes to commit."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 7a) Push directly to target branch (mode=push)
+      - name: Push to target branch (mode=push)
+        if: steps.commit.outputs.changed == 'true' && inputs.mode == 'push'
+        run: |
+          cd target
+          git push origin HEAD:${{ inputs.target_branch }}
+
+      # 7b) Create PR branch + open PR (mode=pr)
+      - name: Create PR (mode=pr)
+        if: steps.commit.outputs.changed == 'true' && inputs.mode == 'pr'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          cd target
+
+          BR="template-sync/${{ github.run_id }}"
+          git checkout -b "$BR"
+          git push -u origin "$BR"
+
+          gh pr create \
+            --repo "${{ inputs.target_owner }}/${{ inputs.target_repo }}" \
+            --base "${{ inputs.target_branch }}" \
+            --head "$BR" \
+            --title "${{ inputs.pr_title }}" \
+            --body "Automated sync from central template repository."

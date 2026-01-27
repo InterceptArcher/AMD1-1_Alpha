@@ -1,0 +1,135 @@
+name: Feature Decomposer
+
+on:
+  push:
+    paths:
+      - 'features/**.md'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  decompose_feature:
+    runs-on: ubuntu-latest
+    if: github.actor != 'github-actions[bot]'
+    
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install PyGithub openai
+
+      - name: Run Decomposer Script
+        env:
+          # --- CHANGE 1: PASS THE PAT HERE ---
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Still needed for checking out code
+          ACTION_PAT: ${{ secrets.ACTION_PAT }}     # Needed for creating the issue
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          cat << 'EOF' > decompose.py
+          import os
+          import json
+          import subprocess
+          from github import Github
+          from openai import OpenAI
+
+          # --- CHANGE 2: USE THE PAT TO LOGIN ---
+          # We use ACTION_PAT to initialize the Github client.
+          # This ensures that any Issue created by this script will TRIGGER other workflows.
+          g = Github(os.environ["ACTION_PAT"]) 
+          
+          client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+          repo = g.get_repo(os.environ["GITHUB_REPOSITORY"])
+
+          def get_changed_files():
+              try:
+                  before = os.environ.get("BEFORE_SHA", "HEAD^")
+                  after = os.environ.get("AFTER_SHA", "HEAD")
+                  
+                  if before == "0000000000000000000000000000000000000000":
+                      cmd = ["git", "ls-tree", "-r", "--name-only", "HEAD"]
+                  else:
+                      cmd = ["git", "diff", "--name-only", before, after]
+                      
+                  output = subprocess.check_output(cmd).decode("utf-8")
+                  files = output.splitlines()
+                  return [f for f in files if f.startswith("features/") and f.endswith(".md")]
+              except Exception as e:
+                  print(f"Error finding files: {e}")
+                  return []
+
+          def parse_feature_with_ai(file_content):
+              prompt = (
+                  "You are a Technical Project Manager. "
+                  "Read the following feature specification and break it down into actionable GitHub Issues. "
+                  "Return a JSON object with a single key 'issues', which is a list. "
+                  "Each item in the list must have 'title' and 'body'. "
+                  "The 'body' should include technical details and acceptance criteria."
+                  "\n\nFeature Document:\n" + file_content
+              )
+              
+              try:
+                  response = client.chat.completions.create(
+                      model="gpt-4o",
+                      messages=[{"role": "user", "content": prompt}],
+                      response_format={"type": "json_object"}
+                  )
+                  return json.loads(response.choices[0].message.content)
+              except Exception as e:
+                  print(f"AI parsing failed: {e}")
+                  return None
+
+          def main():
+              changed_files = get_changed_files()
+              if not changed_files:
+                  print("No feature files found.")
+                  return
+
+              for file_path in changed_files:
+                  print(f"Processing {file_path}...")
+                  try:
+                      with open(file_path, 'r') as f:
+                          content = f.read()
+
+                      result = parse_feature_with_ai(content)
+                      
+                      if result and 'issues' in result:
+                          issues = result['issues']
+                          label_name = f"feat-{os.path.basename(file_path).replace('.md', '')}"
+                          try:
+                              repo.create_label(label_name, "0E8A16")
+                          except:
+                              pass 
+
+                          for issue_data in issues:
+                              print(f"Creating issue: {issue_data['title']}")
+                              # This creation event will now trigger the Spec Architect!
+                              repo.create_issue(
+                                  title=issue_data['title'],
+                                  body=f"{issue_data['body']}\n\n*Source: {file_path}*",
+                                  labels=[label_name]
+                              )
+                      else:
+                          print("No valid JSON returned from AI.")
+
+                  except Exception as e:
+                      print(f"Failed to process {file_path}: {e}")
+
+          if __name__ == "__main__":
+              main()
+          EOF
+
+          python decompose.py

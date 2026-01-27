@@ -1,0 +1,95 @@
+name: Monitor Deployment Logs
+on:
+  push:
+    paths:
+      - 'deployment_logs/**.md'
+
+jobs:
+  analyze-and-report:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2 # Required to detect file changes in the last commit
+
+      - name: Identify New Log File
+        id: check_files
+        run: |
+          # Look for ADDED (.md) files in the deployment_logs folder from the last commit
+          # --diff-filter=A ensures we only catch NEW files, not edits to old ones
+          NEW_FILE=$(git diff --name-only --diff-filter=A HEAD^ HEAD | grep '^deployment_logs/.*\.md$' | head -n 1)
+          
+          if [ -z "$NEW_FILE" ]; then
+            echo "No new .md log files detected."
+            echo "file_path=" >> $GITHUB_OUTPUT
+          else
+            echo "New log file detected: $NEW_FILE"
+            echo "file_path=$NEW_FILE" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Analyze Log with ChatGPT
+        if: steps.check_files.outputs.file_path != ''
+        id: chatgpt
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          FILE_PATH: ${{ steps.check_files.outputs.file_path }}
+        run: |
+          # We use a small inline Python script to handle the API call and JSON safely
+          python3 -c "
+          import os, json, urllib.request
+          
+          # 1. Read the log file
+          with open(os.environ['FILE_PATH'], 'r') as f:
+              log_content = f.read()
+
+          # 2. Prepare the prompt
+          prompt = (
+              f'Review this deployment log error. '
+              f'Please generate a GitHub Issue Title and a detailed Body describing the error.\n\n'
+              f'Log Content:\n{log_content[:8000]}'  # Truncate to avoid token limits
+          )
+
+          data = {
+              'model': 'gpt-4o', 
+              'messages': [{'role': 'user', 'content': prompt}]
+          }
+
+          # 3. Call OpenAI
+          req = urllib.request.Request(
+              'https://api.openai.com/v1/chat/completions',
+              data=json.dumps(data).encode('utf-8'),
+              headers={'Authorization': f'Bearer {os.environ['OPENAI_API_KEY']}', 'Content-Type': 'application/json'}
+          )
+          
+          try:
+              response = urllib.request.urlopen(req)
+              result = json.load(response)
+              analysis = result['choices'][0]['message']['content']
+              
+              # 4. Output to GitHub Environment for the next step (Handling multiline strings)
+              import uuid
+              delimiter = uuid.uuid4()
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as gh_out:
+                  gh_out.write(f'analysis<<{delimiter}\n{analysis}\n{delimiter}\n')
+                  
+          except Exception as e:
+              print(f'API Error: {e}')
+              exit(1)
+          "
+
+      - name: Create GitHub Issue
+        if: steps.check_files.outputs.file_path != ''
+        env:
+          # CRITICAL: Using PAT triggers your OTHER workflow
+          GH_TOKEN: ${{ secrets.ACTION_PAT }} 
+          TITLE: "Deployment Error Detected: ${{ steps.check_files.outputs.file_path }}"
+          BODY: ${{ steps.chatgpt.outputs.analysis }}
+        run: |
+          gh issue create \
+            --title "$TITLE" \
+            --body "$BODY" \
+            --label "deployment-failure"

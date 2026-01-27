@@ -1,0 +1,22 @@
+{
+  "name": "Claude + Playwright (Fixed)",
+  "image": "mcr.microsoft.com/playwright:v1.48.0-jammy",
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
+  "remoteUser": "root",
+  "updateContentCommand": "echo 'Starting Install...' > install.log && npm install -g @anthropic-ai/claude-code >> install.log 2>&1 && (ls package.json || npm init -y) >> install.log 2>&1 && npm pkg set type='module' >> install.log 2>&1 && npm install -D @playwright/test typescript @types/node >> install.log 2>&1 && echo '{\"compilerOptions\":{\"target\":\"ES2022\",\"module\":\"NodeNext\",\"moduleResolution\":\"NodeNext\",\"types\":[\"node\"]}}' > tsconfig.json && echo 'Done!' >> install.log",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "typescript.validate.enable": true
+      },
+      "extensions": [
+        "ms-vscode.vscode-json",
+        "ms-vscode.vscode-yaml",
+        "GitHub.copilot-chat",
+        "ms-playwright.playwright"
+      ]
+    }
+  }
+}

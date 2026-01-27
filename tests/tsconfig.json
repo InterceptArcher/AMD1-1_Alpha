@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "es2016",
+    "lib": ["es2016", "dom"],
+    "types": ["node", "@playwright/test"]
+  },
+  "include": ["**/*.ts"]
+}
