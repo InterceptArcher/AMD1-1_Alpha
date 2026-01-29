@@ -1,0 +1,34 @@
+# Supabase configuration for local development and deployment
+
+[project]
+name = "amd1-1-alpha"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public"]
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[storage]
+enabled = true
+
+[functions]
+# Edge Functions configuration
+
+[functions.submit-form]
+verify_jwt = false  # Allow public access (frontend calls this)
+
+[functions.get-job-status]
+verify_jwt = false  # Allow public access (frontend polls this)
+
+# Environment variables needed for Edge Functions:
+# - SUPABASE_URL (auto-set)
+# - SUPABASE_SERVICE_ROLE_KEY (auto-set)
+# - RAILWAY_BACKEND_URL (set in Supabase dashboard)

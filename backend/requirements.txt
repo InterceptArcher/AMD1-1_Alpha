@@ -29,3 +29,7 @@ mypy==1.7.1
 
 # Logging & Monitoring
 python-json-logger==2.0.7
+
+# PDF Generation (optional - install for production)
+# weasyprint==60.1
+# reportlab==4.0.7

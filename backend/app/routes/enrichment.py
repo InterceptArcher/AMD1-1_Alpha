@@ -20,6 +20,8 @@ from app.models.schemas import (
 from app.services.supabase_client import SupabaseClient, get_supabase_client
 from app.services.rad_orchestrator import RADOrchestrator
 from app.services.llm_service import LLMService
+from app.services.compliance import ComplianceService, validate_personalization
+from app.services.pdf_service import PDFService
 
 logger = logging.getLogger(__name__)
 
@@ -64,22 +66,41 @@ async def enrich_profile(
         email = request.email.lower().strip()
         domain = request.domain or email.split("@")[1]
         
-        # Create orchestrator and LLM service
+        # Create services
         orchestrator = RADOrchestrator(supabase)
         llm_service = LLMService()
-        
+        compliance_service = ComplianceService()
+
         # Run enrichment (sync in alpha, could be async/queued later)
         finalized = await orchestrator.enrich(email, domain)
-        
-        # Generate personalization (sync in alpha)
-        personalization = await llm_service.generate_personalization(finalized)
-        
+
+        # Generate personalization
+        use_opus = llm_service.should_use_opus(finalized)
+        personalization = await llm_service.generate_personalization(finalized, use_opus=use_opus)
+
+        intro_hook = personalization.get("intro_hook", "")
+        cta = personalization.get("cta", "")
+
+        # Run compliance check
+        compliance_result = compliance_service.check(intro_hook, cta, auto_correct=True)
+
+        if not compliance_result.passed and compliance_result.corrected_intro:
+            # Use corrected content
+            intro_hook = compliance_result.corrected_intro
+            cta = compliance_result.corrected_cta
+            logger.info(f"[{job_id}] Using compliance-corrected content")
+        elif not compliance_result.passed:
+            # Use safe fallback
+            intro_hook = compliance_service.get_safe_intro(finalized)
+            cta = compliance_service.get_safe_cta(finalized)
+            logger.warning(f"[{job_id}] Compliance failed, using fallback content")
+
         # Update finalize_data with personalization
-        supabase.write_finalize_data(
+        supabase.upsert_finalize_data(
             email=email,
             normalized_data=finalized,
-            intro=personalization.get("intro_hook"),
-            cta=personalization.get("cta"),
+            intro=intro_hook,
+            cta=cta,
             data_sources=orchestrator.data_sources
         )
         
@@ -196,7 +217,7 @@ async def get_profile(
 async def health_check(supabase: SupabaseClient = Depends(get_supabase_client)) -> dict:
     """
     GET /rad/health
-    
+
     Health check for the enrichment service.
     Verifies Supabase connectivity.
     """
@@ -212,4 +233,90 @@ async def health_check(supabase: SupabaseClient = Depends(get_supabase_client)) 
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Service unhealthy"
+        )
+
+
+@router.post(
+    "/pdf/{email}",
+    responses={
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse}
+    }
+)
+async def generate_pdf(
+    email: str,
+    supabase: SupabaseClient = Depends(get_supabase_client)
+) -> dict:
+    """
+    POST /rad/pdf/{email}
+
+    Generate personalized PDF ebook for a profile.
+    Requires the profile to exist in finalize_data.
+
+    Args:
+        email: Email address to generate PDF for
+        supabase: Supabase client (injected)
+
+    Returns:
+        Dict with pdf_url, storage_path, file_size
+
+    Raises:
+        HTTPException: 404 if profile not found, 500 on generation failure
+    """
+    try:
+        email = email.lower().strip()
+        logger.info(f"PDF generation requested for {email}")
+
+        # Fetch profile
+        finalized_record = supabase.get_finalize_data(email)
+
+        if not finalized_record:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No profile found for {email}. Run POST /rad/enrich first."
+            )
+
+        # Get job ID (if exists)
+        job_id = finalized_record.get("id", 0)
+
+        # Initialize PDF service
+        pdf_service = PDFService(supabase)
+
+        # Generate PDF
+        result = await pdf_service.generate_pdf(
+            job_id=job_id,
+            profile=finalized_record.get("normalized_data", {}),
+            intro_hook=finalized_record.get("personalization_intro", ""),
+            cta=finalized_record.get("personalization_cta", "")
+        )
+
+        # Store PDF delivery record
+        try:
+            supabase.create_pdf_delivery(
+                job_id=job_id,
+                pdf_url=result.get("pdf_url"),
+                storage_path=result.get("storage_path"),
+                file_size_bytes=result.get("file_size_bytes")
+            )
+        except Exception as e:
+            logger.warning(f"Failed to store PDF delivery record: {e}")
+
+        logger.info(f"PDF generated for {email}: {result.get('file_size_bytes')} bytes")
+
+        return {
+            "email": email,
+            "pdf_url": result.get("pdf_url"),
+            "storage_path": result.get("storage_path"),
+            "file_size_bytes": result.get("file_size_bytes"),
+            "expires_at": result.get("expires_at"),
+            "generated_at": result.get("generated_at")
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"PDF generation failed for {email}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="PDF generation failed"
         )

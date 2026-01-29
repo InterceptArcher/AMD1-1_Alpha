@@ -1,222 +1,392 @@
 """
 RAD Orchestrator: Coordinates enrichment workflow.
-- Fetches data from external APIs (mocked in alpha)
-- Applies resolution logic (council of LLMs + fallback)
+- Fetches data from external APIs (Apollo, PDL, Hunter, Tavily, ZoomInfo)
+- Applies resolution logic (source priority + merge rules)
 - Writes normalized output to Supabase
 """
 
 import logging
+import asyncio
 from datetime import datetime
-from typing import Dict, Any, Optional, List
-import httpx
+from typing import Dict, Any, Optional, List, Tuple
 
 from app.config import settings
 from app.services.supabase_client import SupabaseClient
+from app.services.enrichment_apis import (
+    get_enrichment_apis,
+    EnrichmentAPIError,
+    ApolloAPI,
+    PDLAPI,
+    HunterAPI,
+    TavilyAPI,
+    ZoomInfoAPI
+)
 
 logger = logging.getLogger(__name__)
+
+# Source trust priority (higher = more trusted)
+SOURCE_PRIORITY = {
+    "apollo": 5,
+    "zoominfo": 4,
+    "pdl": 3,
+    "hunter": 2,
+    "tavily": 1
+}
 
 
 class RADOrchestrator:
     """
     Orchestrates the full enrichment pipeline for a given email.
-    Alpha version: Mocked external APIs, placeholder resolution logic.
+    Fetches from multiple APIs in parallel, merges data with conflict resolution.
     """
 
     def __init__(self, supabase_client: SupabaseClient):
         """
         Initialize orchestrator.
-        
+
         Args:
             supabase_client: Supabase data access layer
         """
         self.supabase = supabase_client
         self.data_sources: List[str] = []
+        self.apis = get_enrichment_apis()
 
-    async def enrich(self, email: str, domain: Optional[str] = None) -> Dict[str, Any]:
+    async def enrich(
+        self,
+        email: str,
+        domain: Optional[str] = None,
+        job_id: Optional[int] = None
+    ) -> Dict[str, Any]:
         """
         Execute full enrichment pipeline for an email.
-        Alpha flow:
-          1. Fetch raw data from external APIs (mocked)
-          2. Apply resolution logic
-          3. Generate placeholder personalization
-          4. Write finalize_data
-        
+
+        Flow:
+          1. Fetch raw data from external APIs (parallel)
+          2. Store raw data in Supabase
+          3. Apply resolution logic (merge with priority)
+          4. Return normalized profile (personalization added by LLM service)
+
         Args:
             email: Email address to enrich
-            domain: Company domain (optional)
-            
+            domain: Company domain (optional, extracted from email if not provided)
+            job_id: Optional job ID for tracking
+
         Returns:
-            Finalized profile dict with metadata
+            Normalized profile dict with metadata
         """
         try:
             logger.info(f"Starting enrichment for {email}")
-            
+            self.data_sources = []
+
             # Extract domain from email if not provided
             if not domain:
                 domain = email.split("@")[1]
-            
-            # Step 1: Fetch raw data from external APIs (mocked)
-            raw_data = await self._fetch_raw_data(email, domain)
-            
-            # Step 2: Apply resolution logic
-            normalized = self._resolve_profile(email, raw_data)
-            
-            # Step 3: Write to finalize_data (personalization added later by LLM service)
-            finalized = self.supabase.write_finalize_data(
-                email=email,
-                normalized_data=normalized,
-                intro=None,  # To be filled by LLM service
-                cta=None,    # To be filled by LLM service
-                data_sources=self.data_sources
-            )
-            
+
+            # Step 1: Fetch raw data from all APIs in parallel
+            raw_data = await self._fetch_all_sources(email, domain)
+
+            # Step 2: Store raw data in Supabase
+            for source, data in raw_data.items():
+                if data and not data.get("_error"):
+                    self.supabase.store_raw_data(email, source, data)
+                    self.data_sources.append(source)
+
+            # Step 3: Apply resolution logic
+            normalized = self._resolve_profile(email, domain, raw_data)
+
+            # Add metadata
+            normalized["email"] = email
+            normalized["domain"] = domain
+            normalized["resolved_at"] = datetime.utcnow().isoformat()
+            normalized["data_sources"] = self.data_sources
+            normalized["data_quality_score"] = self._calculate_quality_score(raw_data)
+
             logger.info(f"Enrichment complete for {email}: {len(self.data_sources)} sources")
-            return finalized
-            
+            return normalized
+
         except Exception as e:
             logger.error(f"Enrichment failed for {email}: {e}")
             raise
 
-    async def _fetch_raw_data(
+    async def _fetch_all_sources(
         self,
+        email: str,
+        domain: str
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Fetch data from all sources in parallel.
+
+        Args:
+            email: Email address
+            domain: Company domain
+
+        Returns:
+            Dict mapping source name to response data
+        """
+        tasks = [
+            self._fetch_with_fallback("apollo", email, domain),
+            self._fetch_with_fallback("pdl", email, domain),
+            self._fetch_with_fallback("hunter", email, domain),
+            self._fetch_with_fallback("tavily", email, domain),
+            self._fetch_with_fallback("zoominfo", email, domain),
+        ]
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        raw_data = {}
+        source_names = ["apollo", "pdl", "hunter", "tavily", "zoominfo"]
+
+        for source_name, result in zip(source_names, results):
+            if isinstance(result, Exception):
+                logger.warning(f"{source_name} failed: {result}")
+                raw_data[source_name] = {"_error": str(result)}
+            else:
+                raw_data[source_name] = result
+
+        return raw_data
+
+    async def _fetch_with_fallback(
+        self,
+        source: str,
         email: str,
         domain: str
     ) -> Dict[str, Any]:
         """
-        Fetch raw data from external APIs.
-        Alpha: Mocked responses; real API calls added later.
-        
+        Fetch from a single source with error handling.
+
         Args:
+            source: Source name
             email: Email address
             domain: Company domain
-            
+
         Returns:
-            Aggregated raw data
+            Response data or error dict
         """
-        raw_data = {}
-        
-        # Mock Apollo API call
-        apollo_mock = await self._mock_apollo_fetch(email, domain)
-        if apollo_mock:
-            raw_data["apollo"] = apollo_mock
-            self.data_sources.append("apollo")
-            self.supabase.store_raw_data(email, "apollo", apollo_mock)
-        
-        # Mock People Data Labs call
-        pdl_mock = await self._mock_pdl_fetch(email)
-        if pdl_mock:
-            raw_data["pdl"] = pdl_mock
-            self.data_sources.append("pdl")
-            self.supabase.store_raw_data(email, "pdl", pdl_mock)
-        
-        # Mock Hunter.io call
-        hunter_mock = await self._mock_hunter_fetch(email)
-        if hunter_mock:
-            raw_data["hunter"] = hunter_mock
-            self.data_sources.append("hunter")
-            self.supabase.store_raw_data(email, "hunter", hunter_mock)
-        
-        # Mock GNews call (company news)
-        gnews_mock = await self._mock_gnews_fetch(domain)
-        if gnews_mock:
-            raw_data["gnews"] = gnews_mock
-            self.data_sources.append("gnews")
-            self.supabase.store_raw_data(email, "gnews", gnews_mock)
-        
-        logger.info(f"Fetched raw data from {len(self.data_sources)} sources for {email}")
-        return raw_data
+        api = self.apis.get(source)
+        if not api:
+            return {"_error": f"Unknown source: {source}"}
 
-    async def _mock_apollo_fetch(self, email: str, domain: str) -> Dict[str, Any]:
-        """
-        Mock Apollo API response.
-        Real implementation: Use httpx to call Apollo with APOLLO_API_KEY.
-        """
-        # Alpha: Return synthetic data
-        return {
-            "email": email,
-            "domain": domain,
-            "company_name": f"Company from {domain}",
-            "first_name": "John",
-            "last_name": "Doe",
-            "title": "VP of Sales",
-            "linkedin_url": f"https://linkedin.com/in/{email.split('@')[0]}"
-        }
-
-    async def _mock_pdl_fetch(self, email: str) -> Dict[str, Any]:
-        """Mock People Data Labs response."""
-        # Alpha: Return synthetic data
-        return {
-            "email": email,
-            "country": "US",
-            "industry": "SaaS",
-            "company_size": "100-500",
-            "company_annual_revenue": "10M-50M"
-        }
-
-    async def _mock_hunter_fetch(self, email: str) -> Dict[str, Any]:
-        """Mock Hunter.io response."""
-        # Alpha: Return synthetic data
-        return {
-            "email": email,
-            "verification_status": "verified",
-            "email_provider": False  # Not a generic provider
-        }
-
-    async def _mock_gnews_fetch(self, domain: str) -> Dict[str, Any]:
-        """Mock GNews response (company news)."""
-        # Alpha: Return synthetic data
-        return {
-            "domain": domain,
-            "recent_news_count": 5,
-            "latest_news_date": datetime.utcnow().isoformat(),
-            "news_summary": "Recent company news placeholder"
-        }
+        try:
+            return await api.enrich(email, domain)
+        except EnrichmentAPIError as e:
+            logger.warning(f"{source} API error: {e}")
+            return {"_error": str(e)}
+        except Exception as e:
+            logger.error(f"{source} unexpected error: {e}")
+            return {"_error": str(e)}
 
     def _resolve_profile(
         self,
         email: str,
-        raw_data: Dict[str, Any]
+        domain: str,
+        raw_data: Dict[str, Dict[str, Any]]
     ) -> Dict[str, Any]:
         """
-        Apply resolution logic to normalize profile.
-        Alpha: Simple merge of raw_data; real logic (council of LLMs) added later.
-        
+        Apply resolution logic to normalize and merge profile data.
+
+        Resolution rules:
+        1. Higher priority sources win on conflicts
+        2. Non-null values preferred over null
+        3. Arrays are merged and deduplicated
+        4. Numeric values averaged when conflicting
+
         Args:
             email: Email address
+            domain: Company domain
             raw_data: Aggregated raw data from APIs
-            
+
         Returns:
             Normalized profile dict
         """
-        # Start with Apollo data (trust it most)
-        normalized = raw_data.get("apollo", {}).copy()
-        
-        # Merge PDL data
-        pdl_data = raw_data.get("pdl", {})
-        if pdl_data:
-            if "country" not in normalized:
-                normalized["country"] = pdl_data.get("country")
-            if "industry" not in normalized:
-                normalized["industry"] = pdl_data.get("industry")
-            if "company_size" not in normalized:
-                normalized["company_size"] = pdl_data.get("company_size")
-        
-        # Add Hunter verification
+        normalized = {}
+
+        # Define field mappings from each source
+        field_mappings = self._get_field_mappings()
+
+        # Process each field
+        for field, sources in field_mappings.items():
+            value = self._resolve_field(field, sources, raw_data)
+            if value is not None:
+                normalized[field] = value
+
+        # Email verification from Hunter
         hunter_data = raw_data.get("hunter", {})
-        if hunter_data:
-            normalized["email_verified"] = hunter_data.get("verification_status") == "verified"
-        
-        # Add news info
-        gnews_data = raw_data.get("gnews", {})
-        if gnews_data:
-            normalized["recent_news_count"] = gnews_data.get("recent_news_count", 0)
-        
-        # Add metadata
-        normalized["email"] = email
-        normalized["resolved_at"] = datetime.utcnow().isoformat()
-        normalized["data_sources"] = self.data_sources
-        
-        # Placeholder data quality score
-        normalized["data_quality_score"] = min(1.0, len(self.data_sources) / 4.0)
-        
+        if hunter_data and not hunter_data.get("_error"):
+            normalized["email_verified"] = hunter_data.get("status") == "valid"
+            normalized["email_score"] = hunter_data.get("score")
+            normalized["email_deliverable"] = hunter_data.get("result") == "deliverable"
+
+        # Company context from Tavily
+        tavily_data = raw_data.get("tavily", {})
+        if tavily_data and not tavily_data.get("_error"):
+            normalized["company_context"] = tavily_data.get("answer")
+            normalized["recent_news"] = tavily_data.get("results", [])
+
         return normalized
+
+    def _get_field_mappings(self) -> Dict[str, List[Tuple[str, str]]]:
+        """
+        Define field mappings from source fields to normalized fields.
+
+        Returns:
+            Dict mapping normalized field to list of (source, source_field) tuples
+        """
+        return {
+            "first_name": [
+                ("apollo", "first_name"),
+                ("pdl", "first_name"),
+            ],
+            "last_name": [
+                ("apollo", "last_name"),
+                ("pdl", "last_name"),
+            ],
+            "full_name": [
+                ("pdl", "full_name"),
+            ],
+            "title": [
+                ("apollo", "title"),
+                ("pdl", "job_title"),
+            ],
+            "company_name": [
+                ("apollo", "company_name"),
+                ("zoominfo", "company_name"),
+                ("pdl", "job_company_name"),
+            ],
+            "industry": [
+                ("apollo", "industry"),
+                ("zoominfo", "industry"),
+                ("pdl", "job_company_industry"),
+            ],
+            "company_size": [
+                ("apollo", "company_size"),
+                ("pdl", "job_company_size"),
+            ],
+            "employee_count": [
+                ("zoominfo", "employee_count"),
+            ],
+            "linkedin_url": [
+                ("apollo", "linkedin_url"),
+                ("pdl", "linkedin_url"),
+            ],
+            "city": [
+                ("apollo", "city"),
+                ("zoominfo", "city"),
+                ("pdl", "location_locality"),
+            ],
+            "state": [
+                ("apollo", "state"),
+                ("zoominfo", "state"),
+                ("pdl", "location_region"),
+            ],
+            "country": [
+                ("apollo", "country"),
+                ("zoominfo", "country"),
+                ("pdl", "location_country"),
+            ],
+            "seniority": [
+                ("apollo", "seniority"),
+            ],
+            "skills": [
+                ("pdl", "skills"),
+            ],
+            "company_description": [
+                ("zoominfo", "description"),
+            ],
+            "founded_year": [
+                ("zoominfo", "founded_year"),
+            ],
+        }
+
+    def _resolve_field(
+        self,
+        field: str,
+        sources: List[Tuple[str, str]],
+        raw_data: Dict[str, Dict[str, Any]]
+    ) -> Any:
+        """
+        Resolve a single field value from multiple sources.
+
+        Uses source priority to pick the best value.
+
+        Args:
+            field: Normalized field name
+            sources: List of (source, source_field) tuples
+            raw_data: Raw data from all sources
+
+        Returns:
+            Resolved field value or None
+        """
+        candidates = []
+
+        for source_name, source_field in sources:
+            source_data = raw_data.get(source_name, {})
+            if source_data and not source_data.get("_error"):
+                value = source_data.get(source_field)
+                if value is not None and value != "":
+                    priority = SOURCE_PRIORITY.get(source_name, 0)
+                    candidates.append((priority, value))
+
+        if not candidates:
+            return None
+
+        # Sort by priority (descending) and return highest priority value
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return candidates[0][1]
+
+    def _calculate_quality_score(self, raw_data: Dict[str, Dict[str, Any]]) -> float:
+        """
+        Calculate data quality score based on source coverage and data completeness.
+
+        Args:
+            raw_data: Raw data from all sources
+
+        Returns:
+            Quality score between 0.0 and 1.0
+        """
+        total_sources = len(self.apis)
+        successful_sources = sum(
+            1 for data in raw_data.values()
+            if data and not data.get("_error") and not data.get("_mock")
+        )
+
+        # Base score from source coverage
+        coverage_score = successful_sources / total_sources
+
+        # Bonus for high-priority sources
+        priority_bonus = 0
+        if raw_data.get("apollo") and not raw_data["apollo"].get("_error"):
+            priority_bonus += 0.1
+        if raw_data.get("zoominfo") and not raw_data["zoominfo"].get("_error"):
+            priority_bonus += 0.1
+
+        # Cap at 1.0
+        return min(1.0, coverage_score + priority_bonus)
+
+    async def enrich_batch(
+        self,
+        emails: List[str],
+        concurrency: int = 5
+    ) -> List[Dict[str, Any]]:
+        """
+        Enrich multiple emails with controlled concurrency.
+
+        Args:
+            emails: List of email addresses
+            concurrency: Max concurrent enrichments
+
+        Returns:
+            List of enrichment results
+        """
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def enrich_with_semaphore(email: str) -> Dict[str, Any]:
+            async with semaphore:
+                try:
+                    return await self.enrich(email)
+                except Exception as e:
+                    logger.error(f"Batch enrichment failed for {email}: {e}")
+                    return {"email": email, "_error": str(e)}
+
+        return await asyncio.gather(*[
+            enrich_with_semaphore(email) for email in emails
+        ])

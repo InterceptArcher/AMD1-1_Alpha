@@ -1,299 +1,364 @@
 # AMD1-1_Alpha: Personalization Pipeline
 
-**A minimal, test-driven implementation of RAD enrichment + LLM personalization for LinkedIn ebooks.**
+**A production-ready post-click personalization system for LinkedIn ebooks.**
 
-## 📋 Overview
+## Overview
 
-This repo transforms RAD (Rapid Automated Data) orchestration into an alpha pipeline that:
+This system transforms visitor emails into personalized ebook experiences through:
 
-1. **Enriches** email/domain via external APIs (Apollo, PDL, Hunter, GNews)
-2. **Resolves** profiles using a council-of-LLMs + fallback logic
-3. **Personalizes** LinkedIn ebook content with Haiku-class LLM (1-2 sec intro, CTA)
-4. **Persists** normalized data in Supabase for frontend consumption
+1. **Multi-source Enrichment** - Apollo, PDL, Hunter, Tavily, ZoomInfo APIs
+2. **Smart Resolution** - Priority-based field merging with fallback logic
+3. **LLM Personalization** - Claude Haiku/Opus generates intro hooks + CTAs
+4. **Compliance Validation** - Banned terms, claim checking, auto-correction
+5. **PDF Generation** - Personalized ebook with signed download URLs
+6. **Async Job Queue** - Supabase Edge Functions + polling
 
-**Target SLA**: End-to-end enrichment + personalization in <60 seconds.
+**Target SLA**: End-to-end in <60 seconds
 
 ---
 
-## 🏗 Architecture
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           CLOUDFLARE (DNS/WAF)                          │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                    ┌───────────────┴───────────────┐
+                    ▼                               ▼
+┌──────────────────────────────┐    ┌──────────────────────────────────────┐
+│     VERCEL (Next.js)         │    │        SUPABASE                      │
+│  • Landing page + UTM parse  │───▶│  • Edge Functions (submit/status)   │
+│  • Email + consent form      │    │  • PostgreSQL (jobs, outputs, data) │
+│  • Loading states            │◀───│  • Storage (PDF bucket)             │
+│  • Personalized content      │    │  • Queues (job processing)          │
+└──────────────────────────────┘    └──────────────────────────────────────┘
+                                                    │
+                                                    ▼
+                                    ┌──────────────────────────────────────┐
+                                    │        RAILWAY (FastAPI)             │
+                                    │  • /rad/enrich - orchestration       │
+                                    │  • /rad/profile - data retrieval     │
+                                    │  • /rad/pdf - ebook generation       │
+                                    │                                      │
+                                    │  Services:                           │
+                                    │  • RADOrchestrator (5 API sources)   │
+                                    │  • LLMService (Haiku/Opus)           │
+                                    │  • ComplianceService                 │
+                                    │  • PDFService                        │
+                                    └──────────────────────────────────────┘
+                                                    │
+                    ┌───────────────┬───────────────┼───────────────┬───────────────┐
+                    ▼               ▼               ▼               ▼               ▼
+                 Apollo           PDL           Hunter          Tavily         ZoomInfo
+                (People)       (People)        (Email)        (Search)       (Company)
+```
 
 ### Tech Stack
 
 | Layer | Technology | Purpose |
-|-------|-----------|---------|
-| **Frontend** | Next.js + TypeScript | Vercel-hosted SPA for ebook rendering |
-| **Backend** | FastAPI + Python | Railway-hosted REST API for enrichment |
-| **Database** | Supabase (PostgreSQL) | Stores raw_data, staging_normalized, finalize_data |
-| **LLM** | Claude Haiku (Anthropic) | Fast inference for intro + CTA generation |
+|-------|------------|---------|
+| **CDN/WAF** | Cloudflare | DNS routing, DDoS protection |
+| **Frontend** | Next.js 14 + TypeScript | Landing page, forms, polling |
+| **Edge Functions** | Supabase Deno | Form submission, job status |
+| **Backend** | FastAPI + Python | Enrichment, LLM, PDF generation |
+| **Database** | Supabase PostgreSQL | Jobs, outputs, profiles |
+| **Storage** | Supabase Storage | PDF file hosting |
+| **LLM** | Claude Haiku/Opus | Personalization generation |
 
-### Data Flow
+---
 
-```
-Email Input
-    ↓
-POST /rad/enrich
-    ↓
-[RADOrchestrator]
-  ├→ Fetch raw_data (Apollo, PDL, Hunter, GNews) → store in raw_data table
-  ├→ Resolution logic (merge, conflict resolution) → staging_normalized
-  ├→ LLMService.generate_personalization() → intro_hook, cta
-  └→ Write finalize_data table
-    ↓
-GET /rad/profile/{email}
-    ↓
-[Frontend] Reads finalize_data → Renders personalized ebook
-```
-
-### Module Layout
+## Project Structure
 
 ```
-/backend/
-├── app/
-│   ├── main.py              # FastAPI app initialization
-│   ├── config.py            # Environment config (Supabase, LLM, APIs)
-│   ├── models/
-│   │   └── schemas.py       # Pydantic request/response schemas
-│   ├── services/
-│   │   ├── supabase_client.py    # Data access layer (raw_data, staging, finalize)
-│   │   ├── rad_orchestrator.py   # Enrichment pipeline orchestration
-│   │   └── llm_service.py        # Personalization content generation
-│   └── routes/
-│       └── enrichment.py    # FastAPI endpoints
-├── tests/
-│   ├── conftest.py          # Pytest fixtures (mocked Supabase)
-│   ├── test_enrichment_endpoints.py
-│   ├── test_supabase_client.py
-│   ├── test_rad_orchestrator.py
-│   └── test_llm_service.py
-├── requirements.txt         # Python dependencies
-├── pyproject.toml          # Build config + tool settings
-├── README.md               # Backend-specific docs
-└── scripts/
-    └── migrate-supabase.sh # DB schema initialization
+/
+├── frontend/                    # Next.js application
+│   ├── src/
+│   │   ├── app/
+│   │   │   ├── layout.tsx      # Root layout
+│   │   │   ├── globals.css     # Tailwind styles
+│   │   │   └── page.tsx        # Landing page with polling
+│   │   └── components/
+│   │       ├── EmailConsentForm.tsx
+│   │       ├── LoadingSpinner.tsx
+│   │       └── PersonalizedContent.tsx
+│   └── __tests__/              # Jest tests (22 tests)
+│
+├── backend/                     # FastAPI application
+│   └── app/
+│       ├── main.py
+│       ├── config.py
+│       ├── routes/
+│       │   └── enrichment.py   # /rad/* endpoints
+│       └── services/
+│           ├── supabase_client.py    # DB operations
+│           ├── rad_orchestrator.py   # Multi-source enrichment
+│           ├── enrichment_apis.py    # Apollo, PDL, Hunter, Tavily, ZoomInfo
+│           ├── llm_service.py        # Anthropic SDK integration
+│           ├── compliance.py         # Content validation
+│           └── pdf_service.py        # Ebook generation
+│
+├── supabase/
+│   ├── config.toml             # Supabase configuration
+│   ├── migrations/             # Database schema
+│   │   ├── 20260127..._create_rad_tables.sql
+│   │   └── 20260129..._add_personalization_tables.sql
+│   └── functions/              # Edge Functions
+│       ├── submit-form/        # POST form handler
+│       └── get-job-status/     # GET polling endpoint
+│
+├── scripts/
+│   ├── deploy-frontend-vercel.sh
+│   ├── deploy-backend-railway.sh
+│   ├── setup-supabase.sh
+│   └── deploy-all.sh
+│
+└── docs/                        # Feature specifications
 ```
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
+- Node.js 18+
 - Python 3.10+
-- pip / venv
 - Supabase project
-- Environment variables set (see [backend/README.md](backend/README.md))
+- API keys (see Environment Variables)
 
-### Install & Run
+### Local Development
 
 ```bash
-# Backend
+# 1. Frontend
+cd frontend
+npm install
+npm run dev              # http://localhost:3000
+
+# 2. Backend
 cd backend
 pip install -r requirements.txt
-
-# Set environment variables
-export SUPABASE_URL=<your_url>
-export SUPABASE_KEY=<your_key>
-
-# Run FastAPI server
 uvicorn app.main:app --reload --port 8000
 
-# In another terminal, run tests
-pytest --cov=app
+# 3. Run migrations
+supabase link --project-ref YOUR_PROJECT_REF
+supabase db push
 ```
 
-### API Usage
+### API Endpoints
 
-**Enrich an email:**
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/rad/enrich` | POST | Start enrichment + personalization |
+| `/rad/profile/{email}` | GET | Retrieve finalized profile |
+| `/rad/pdf/{email}` | POST | Generate personalized PDF |
+| `/rad/health` | GET | Service health check |
+
+**Example: Enrich an email**
 ```bash
 curl -X POST http://localhost:8000/rad/enrich \
   -H "Content-Type: application/json" \
-  -d '{"email": "user@company.com"}'
-```
-
-**Retrieve profile:**
-```bash
-curl http://localhost:8000/rad/profile/user@company.com
-```
-
-**Health check:**
-```bash
-curl http://localhost:8000/rad/health
+  -d '{"email": "john@acme.com"}'
 ```
 
 ---
 
-## 🧪 Testing
+## Features
 
-All tests use **mocked Supabase** and **mocked external APIs**—no real calls, instant feedback.
+### Enrichment Sources (5 APIs)
 
+| Source | Data Type | Priority |
+|--------|-----------|----------|
+| **Apollo** | People: name, title, company, LinkedIn | 5 (highest) |
+| **ZoomInfo** | Company: size, revenue, industry, tech stack | 4 |
+| **PDL** | People: skills, experience, location | 3 |
+| **Hunter** | Email: verification, deliverability | 2 |
+| **Tavily** | Context: company news, search results | 1 |
+
+### LLM Personalization
+
+- **Model**: Claude Haiku (default) or Opus (high-quality profiles)
+- **Output**: JSON with `intro_hook` + `cta`
+- **Constraints**: Intro ≤200 chars, CTA ≤150 chars
+- **Retry**: Auto-fixes malformed JSON
+
+### Compliance Layer
+
+**Blocked content:**
+- Unsubstantiated claims ("guaranteed", "proven", "#1")
+- Superlatives without evidence ("best", "fastest")
+- Urgency tactics ("act now", "limited time")
+- Competitive attacks
+
+**Auto-correction:** Removes terms or falls back to safe copy.
+
+### PDF Generation
+
+- HTML template with personalization slots
+- Uses WeasyPrint or ReportLab
+- Stored in Supabase Storage
+- Signed URLs with 7-day expiry
+
+---
+
+## Environment Variables
+
+### Vercel (Frontend)
+```bash
+NEXT_PUBLIC_API_URL=https://your-backend.railway.app
+NEXT_PUBLIC_SUPABASE_URL=https://xxx.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
+SUPABASE_SERVICE_ROLE=eyJ...          # Server-side only
+```
+
+### Railway (Backend)
+```bash
+# Required
+SUPABASE_URL=https://xxx.supabase.co
+SUPABASE_KEY=eyJ...                   # service_role key
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Enrichment APIs (optional - uses mocks if missing)
+APOLLO_API_KEY=...
+PDL_API_KEY=...
+HUNTER_API_KEY=...
+TAVILY_API_KEY=...
+ZOOMINFO_API_KEY=...
+```
+
+### Supabase (Edge Functions)
+```bash
+SUPABASE_URL           # Auto-set
+SUPABASE_SERVICE_ROLE_KEY  # Auto-set
+RAILWAY_BACKEND_URL=https://your-backend.railway.app
+```
+
+---
+
+## Database Schema
+
+### Core Tables
+
+```sql
+-- Job tracking
+personalization_jobs (id, email, domain, cta, status, created_at, completed_at)
+
+-- LLM outputs
+personalization_outputs (job_id, intro_hook, cta, model_used, tokens_used, compliance_passed)
+
+-- PDF delivery
+pdf_deliveries (job_id, pdf_url, storage_path, delivery_status)
+
+-- Enrichment data
+raw_data (email, source, payload, fetched_at)
+staging_normalized (email, normalized_fields, status)
+finalize_data (email, normalized_data, personalization_intro, personalization_cta)
+```
+
+Run migrations:
+```bash
+supabase db push
+```
+
+---
+
+## Deployment
+
+### Automated Deployment
+
+```bash
+# Deploy everything
+./scripts/deploy-all.sh
+
+# Or individually
+./scripts/setup-supabase.sh
+./scripts/deploy-backend-railway.sh
+./scripts/deploy-frontend-vercel.sh
+```
+
+### Manual Deployment
+
+**Vercel:**
+```bash
+cd frontend
+vercel --prod
+```
+
+**Railway:**
 ```bash
 cd backend
-
-# Run all tests
-pytest
-
-# Run with coverage
-pytest --cov=app --cov-report=html
-
-# Run specific test file
-pytest tests/test_enrichment_endpoints.py -v
-
-# Run async tests
-pytest tests/test_rad_orchestrator.py::TestRADOrchestrator -v
+railway up
 ```
-
-### Test Coverage
-
-- ✅ **Endpoints** (POST /rad/enrich, GET /rad/profile)
-- ✅ **Data access** (Supabase CRUD operations)
-- ✅ **Enrichment logic** (API mocking, profile resolution)
-- ✅ **LLM service** (personalization generation)
-- ✅ **Error handling** (invalid emails, not found, DB failures)
 
 ---
 
-## 📊 Database Schema
+## Testing
 
-Three tables in Supabase PostgreSQL:
-
-### `raw_data`
-Stores responses from external APIs.
-```sql
-id | email | source | payload | fetched_at
-```
-
-### `staging_normalized`
-Tracks enrichment progress.
-```sql
-id | email | normalized_fields | status | created_at | updated_at
-```
-
-### `finalize_data`
-Final profiles ready for frontend.
-```sql
-id | email | normalized_data | personalization_intro | personalization_cta | resolved_at
-```
-
-See [backend/README.md](backend/README.md) for full SQL schema.
-
----
-
-## 🔌 Extending for Production
-
-### Real API Calls
-Replace mock methods in `RADOrchestrator`:
-```python
-async def _fetch_apollo(self, email: str, domain: str):
-    # Use httpx + APOLLO_API_KEY instead of synthetic data
-    async with httpx.AsyncClient() as client:
-        response = await client.get(...)
-        return response.json()
-```
-
-### Resolution Logic
-Enhance `_resolve_profile()` with council-of-LLMs:
-```python
-def _resolve_profile(self, email, raw_data):
-    # Compare contradictions between Apollo/PDL
-    # Ask Claude for conflict resolution
-    # Assign trust scores per source
-    # Return merged profile
-```
-
-### Real LLM Prompts
-Implement in `LLMService.generate_personalization()`:
-```python
-async def generate_personalization(self, profile):
-    prompt = f"""
-    Generate a personalized intro (1-2 sentences) and CTA for:
-    Name: {profile['first_name']}
-    Company: {profile['company']}
-    Title: {profile['title']}
-    """
-    # Call Anthropic API with structured output
-    response = await client.messages.create(...)
-    return {"intro_hook": ..., "cta": ...}
-```
-
-### Async Job Queue
-For large-scale enrichment:
-- Move enrichment to async job queue (Celery + Redis)
-- Return job_id immediately, poll for status
-- Implement exponential backoff for API retries
-
-### Monitoring & Observability
-- Add OpenTelemetry instrumentation
-- Log all enrichment milestones
-- Track data quality scores over time
-- Monitor LLM latency and cost
-
----
-
-## 🔐 Security & Secrets
-
-Following [CLAUDE.md](CLAUDE.md):
-
-- ✅ **No secrets in code**: All API keys loaded from environment
-- ✅ **No `.env` files committed**: Use platform secret managers
-- ✅ **Supabase RLS policies**: Restrict data access by user
-- ✅ **Input validation**: Pydantic schemas + email verification
-- ✅ **No SQL injection**: Using Supabase SDK (parameterized queries)
-
-Required environment variables:
+### Frontend (Jest)
 ```bash
-SUPABASE_URL
-SUPABASE_KEY
-SUPABASE_JWT_SECRET
-ANTHROPIC_API_KEY
-APOLLO_API_KEY       (optional in alpha)
-PDL_API_KEY          (optional in alpha)
-HUNTER_API_KEY       (optional in alpha)
-GNEWS_API_KEY        (optional in alpha)
+cd frontend
+npm test              # 22 tests
+npm run test:coverage
+```
+
+### Backend (Pytest)
+```bash
+cd backend
+pytest                # All tests
+pytest --cov=app      # With coverage
 ```
 
 ---
 
-## 📚 Documentation
+## Roadmap
 
-- [backend/README.md](backend/README.md) — Backend setup, API docs, configuration
-- [setup/stack.json](setup/stack.json) — Infrastructure stack definition
-- [docs/](docs/) — Feature specs and technical architecture notes
-- [CLAUDE.md](CLAUDE.md) — Engineering rulebook for AI code generation
+### Phase 1 - Alpha (Complete)
+- ✅ Next.js frontend with email form
+- ✅ FastAPI backend with /rad/* endpoints
+- ✅ Multi-source enrichment (5 APIs)
+- ✅ Real Anthropic SDK integration
+- ✅ Compliance validation layer
+- ✅ PDF generation service
+- ✅ Supabase Edge Functions
+- ✅ Deployment scripts
 
----
+### Phase 2 - Beta
+- [ ] Supabase Queues for durable jobs
+- [ ] Batch enrichment endpoint
+- [ ] Rate limiting + circuit breakers
+- [ ] OpenTelemetry instrumentation
+- [ ] Marketing automation webhook
 
-## 🛣 Roadmap
-
-**Phase 1 (Current - Alpha)**
-- ✅ Basic FastAPI endpoints
-- ✅ Mocked API calls + Supabase integration
-- ✅ Comprehensive pytest suite
-- ✅ Placeholder LLM service
-
-**Phase 2 (Beta)**
-- Real Apollo, PDL, Hunter, GNews API calls
-- Council-of-LLMs conflict resolution
-- Real Claude Haiku prompts
-- Async job queue for bulk enrichment
-
-**Phase 3 (Production)**
-- Advanced fallback logic
-- Multi-language support
-- Rate limiting + circuit breakers
-- Full observability (traces, metrics, logs)
-- Deployment automation (Railway, Vercel, Supabase)
+### Phase 3 - Production
+- [ ] A/B testing for LLM prompts
+- [ ] Multi-language support
+- [ ] Advanced PDF templates
+- [ ] Chaos testing suite
+- [ ] Cost optimization dashboard
 
 ---
 
-## 🤝 Contributing
+## Security
 
-1. Follow the rules in [CLAUDE.md](CLAUDE.md)
-2. Write tests first (TDD discipline)
-3. Keep code idiomatic and well-commented
-4. Use existing FastAPI + Supabase setup (no new infrastructure)
+Per [CLAUDE.md](CLAUDE.md):
+
+- ✅ No secrets in code
+- ✅ No `.env` files committed
+- ✅ Input validation (Pydantic + email regex)
+- ✅ Parameterized queries (Supabase SDK)
+- ✅ Compliance checks on LLM output
 
 ---
 
-## 📝 License
+## Contributing
+
+1. Follow [CLAUDE.md](CLAUDE.md) rules
+2. Write tests first (TDD)
+3. Keep code simple and focused
+4. Document new features in README
+
+---
+
+## License
 
 ISC

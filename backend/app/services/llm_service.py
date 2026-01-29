@@ -1,93 +1,290 @@
 """
 LLM Service: Generates personalization content (intro hook + CTA).
-Uses Claude Haiku for fast inference (target <60s end-to-end).
-Alpha: Placeholder implementation; real prompts + logic plugged in later.
+Uses Claude Haiku for fast inference (target <30s latency).
+Implements structured output, validation, and retry logic.
 """
 
 import logging
-from typing import Optional, Dict, Any
+import json
+import time
+import re
+from typing import Optional, Dict, Any, List, Tuple
+from dataclasses import dataclass
+
+import anthropic
+from anthropic import APIError, APITimeoutError, RateLimitError
+
+from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Constants
+MAX_RETRIES = 3
+RETRY_DELAY_SECONDS = 1.0
+DEFAULT_MODEL = "claude-3-5-haiku-20241022"
+OPUS_MODEL = "claude-opus-4-5-20251101"
+
+# Output constraints
+MAX_INTRO_LENGTH = 200  # characters
+MAX_CTA_LENGTH = 150  # characters
+
+
+@dataclass
+class PersonalizationResult:
+    """Result from personalization generation."""
+    intro_hook: str
+    cta: str
+    model_used: str
+    tokens_used: int
+    latency_ms: int
+    raw_response: Dict[str, Any]
 
 
 class LLMService:
     """
-    Generates personalized intro hook and CTA using a fast LLM (Claude Haiku).
-    Alpha: Placeholder implementation with synthetic responses.
-    Real implementation:
-      - Use anthropic SDK
-      - Construct prompts from normalized profile
-      - Implement retry logic for API failures
-      - Validate JSON response
+    Generates personalized intro hook and CTA using Claude.
+    - Uses Haiku for speed (default)
+    - Falls back to Opus for complex cases
+    - Implements structured output with JSON validation
+    - Retry logic for transient failures
     """
 
     def __init__(self, api_key: Optional[str] = None):
         """
         Initialize LLM service.
-        
+
         Args:
             api_key: Anthropic API key. If None, use environment variable.
         """
-        self.api_key = api_key
-        # Real init: create anthropic.Anthropic(api_key=api_key)
-        logger.info("LLM service initialized (alpha: placeholder)")
+        self.api_key = api_key or settings.ANTHROPIC_API_KEY
+        self.client = None
+
+        if self.api_key:
+            self.client = anthropic.Anthropic(api_key=self.api_key)
+            logger.info("LLM service initialized with Anthropic client")
+        else:
+            logger.warning("LLM service initialized without API key (mock mode)")
 
     async def generate_personalization(
         self,
-        normalized_profile: Dict[str, Any]
+        normalized_profile: Dict[str, Any],
+        use_opus: bool = False
     ) -> Dict[str, str]:
         """
         Generate intro hook and CTA from normalized profile.
-        Target latency: <30s (leaves buffer in 60s SLA).
-        
+
         Args:
             normalized_profile: Normalized enrichment data
-            
+            use_opus: Whether to use Opus model for richer output
+
         Returns:
-            Dict with 'intro_hook' and 'cta' keys
+            Dict with 'intro_hook', 'cta', and metadata
         """
+        if not self.client:
+            return self._mock_response(normalized_profile)
+
+        start_time = time.time()
+        model = OPUS_MODEL if use_opus else DEFAULT_MODEL
+
+        # Build the prompt
+        prompt = self._build_prompt(normalized_profile)
+
+        # Try with retries
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = self.client.messages.create(
+                    model=model,
+                    max_tokens=500,
+                    messages=[{"role": "user", "content": prompt}],
+                    system=self._get_system_prompt()
+                )
+
+                # Parse response
+                content = response.content[0].text
+                parsed = self._parse_response(content)
+
+                if parsed:
+                    latency_ms = int((time.time() - start_time) * 1000)
+
+                    result = {
+                        "intro_hook": parsed["intro_hook"],
+                        "cta": parsed["cta"],
+                        "model_used": model,
+                        "tokens_used": response.usage.input_tokens + response.usage.output_tokens,
+                        "latency_ms": latency_ms,
+                        "raw_response": {"content": content}
+                    }
+
+                    logger.info(
+                        f"Generated personalization: model={model}, "
+                        f"tokens={result['tokens_used']}, latency={latency_ms}ms"
+                    )
+                    return result
+
+                # Parse failed, retry with fix prompt
+                if attempt < MAX_RETRIES - 1:
+                    logger.warning(f"Parse failed, retrying with fix prompt (attempt {attempt + 1})")
+                    prompt = self._build_fix_prompt(content)
+                    continue
+
+            except RateLimitError as e:
+                logger.warning(f"Rate limited, retrying in {RETRY_DELAY_SECONDS}s: {e}")
+                time.sleep(RETRY_DELAY_SECONDS * (attempt + 1))
+                continue
+
+            except APITimeoutError as e:
+                logger.warning(f"API timeout, retrying: {e}")
+                continue
+
+            except APIError as e:
+                logger.error(f"API error: {e}")
+                if attempt == MAX_RETRIES - 1:
+                    raise
+
+        # All retries failed, return fallback
+        logger.error("All retries failed, returning fallback response")
+        return self._fallback_response(normalized_profile)
+
+    def _get_system_prompt(self) -> str:
+        """Get the system prompt for personalization."""
+        return """You are a B2B marketing copywriter creating personalized content for ebook landing pages.
+
+Your task: Generate a personalized intro hook (1-2 sentences) and call-to-action (CTA) based on the prospect's profile.
+
+Rules:
+1. Be conversational and specific to their role/company
+2. Reference their industry or company context when available
+3. Keep intro under 200 characters
+4. Keep CTA under 150 characters
+5. Do NOT make unsubstantiated claims (no "guaranteed", "proven", "#1", etc.)
+6. Do NOT use superlatives without evidence
+7. Sound helpful, not salesy
+
+Output ONLY valid JSON in this exact format:
+{
+  "intro_hook": "Your personalized intro here",
+  "cta": "Your call to action here"
+}
+
+No other text before or after the JSON."""
+
+    def _build_prompt(self, profile: Dict[str, Any]) -> str:
+        """Build the user prompt from profile data."""
+        parts = []
+
+        # Extract key fields
+        first_name = profile.get("first_name", "there")
+        company = profile.get("company_name", "your company")
+        title = profile.get("title", "professional")
+        industry = profile.get("industry", "your industry")
+        company_size = profile.get("company_size", "")
+        company_context = profile.get("company_context", "")
+        seniority = profile.get("seniority", "")
+
+        parts.append(f"Create personalized content for this prospect:\n")
+        parts.append(f"- First Name: {first_name}")
+        parts.append(f"- Company: {company}")
+        parts.append(f"- Title: {title}")
+        parts.append(f"- Industry: {industry}")
+
+        if company_size:
+            parts.append(f"- Company Size: {company_size}")
+
+        if seniority:
+            parts.append(f"- Seniority: {seniority}")
+
+        if company_context:
+            parts.append(f"\nRecent company context: {company_context[:500]}")
+
+        parts.append("\nGenerate the JSON response now.")
+
+        return "\n".join(parts)
+
+    def _build_fix_prompt(self, failed_response: str) -> str:
+        """Build a prompt to fix malformed JSON."""
+        return f"""The previous response was not valid JSON. Here's what was returned:
+
+{failed_response}
+
+Please fix this and return ONLY valid JSON in this exact format:
+{{
+  "intro_hook": "Your personalized intro here",
+  "cta": "Your call to action here"
+}}
+
+No other text."""
+
+    def _parse_response(self, content: str) -> Optional[Dict[str, str]]:
+        """
+        Parse LLM response to extract intro_hook and cta.
+
+        Args:
+            content: Raw LLM response text
+
+        Returns:
+            Dict with intro_hook and cta, or None if parse failed
+        """
+        # Try direct JSON parse
         try:
-            email = normalized_profile.get("email", "unknown")
-            company = normalized_profile.get("company_name", "Unknown Company")
-            title = normalized_profile.get("title", "professional")
-            
-            # Alpha: Synthetic responses
-            # Real implementation:
-            #   - Extract persona, buyer stage, context from profile
-            #   - Call Claude Haiku with structured prompt
-            #   - Parse + validate JSON response
-            #   - Return {intro_hook, cta}
-            
-            intro_hook = (
-                f"Hi {email.split('@')[0]}, I noticed you're building out sales infrastructure at {company}. "
-                f"This ebook covers how to..."
-            )
-            
-            cta = (
-                f"Ready to see how other {title}s are scaling? "
-                f"Let's chat about your pipeline challenges."
-            )
-            
-            result = {
-                "intro_hook": intro_hook,
-                "cta": cta
-            }
-            
-            logger.info(f"Generated personalization for {email} (alpha)")
-            return result
-            
-        except Exception as e:
-            logger.error(f"Failed to generate personalization: {e}")
-            raise
+            # Find JSON in response (handle markdown code blocks)
+            json_match = re.search(r'\{[^{}]*"intro_hook"[^{}]*"cta"[^{}]*\}', content, re.DOTALL)
+            if json_match:
+                data = json.loads(json_match.group())
+                intro = data.get("intro_hook", "").strip()
+                cta = data.get("cta", "").strip()
+
+                if intro and cta:
+                    # Validate lengths
+                    if len(intro) > MAX_INTRO_LENGTH:
+                        intro = intro[:MAX_INTRO_LENGTH - 3] + "..."
+                    if len(cta) > MAX_CTA_LENGTH:
+                        cta = cta[:MAX_CTA_LENGTH - 3] + "..."
+
+                    return {"intro_hook": intro, "cta": cta}
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON parse error: {e}")
+
+        return None
+
+    def _mock_response(self, profile: Dict[str, Any]) -> Dict[str, str]:
+        """Generate mock response when API key not configured."""
+        logger.info("LLM: Using mock response (no API key)")
+
+        first_name = profile.get("first_name", "there")
+        company = profile.get("company_name", "your company")
+        title = profile.get("title", "professional")
+
+        return {
+            "intro_hook": f"Hi {first_name}, I noticed you're leading initiatives at {company}. This guide covers strategies that align with your role.",
+            "cta": f"Ready to explore how other {title}s are approaching this? Let's connect.",
+            "model_used": "mock",
+            "tokens_used": 0,
+            "latency_ms": 0,
+            "raw_response": {"_mock": True}
+        }
+
+    def _fallback_response(self, profile: Dict[str, Any]) -> Dict[str, str]:
+        """Generate safe fallback response on all failures."""
+        logger.warning("Using fallback response due to LLM failures")
+
+        first_name = profile.get("first_name", "")
+        greeting = f"Hi {first_name}, " if first_name else ""
+
+        return {
+            "intro_hook": f"{greeting}This guide was created to help professionals like you navigate common challenges in your field.",
+            "cta": "Download the guide and discover actionable insights for your team.",
+            "model_used": "fallback",
+            "tokens_used": 0,
+            "latency_ms": 0,
+            "raw_response": {"_fallback": True}
+        }
 
     async def generate_intro_hook(
         self,
         normalized_profile: Dict[str, Any]
     ) -> str:
-        """
-        Generate just the intro hook.
-        1-2 sentences, personalized to company/role/context.
-        """
+        """Generate just the intro hook."""
         result = await self.generate_personalization(normalized_profile)
         return result.get("intro_hook", "")
 
@@ -95,9 +292,35 @@ class LLMService:
         self,
         normalized_profile: Dict[str, Any]
     ) -> str:
-        """
-        Generate just the CTA.
-        Buyer-stage aware, conversational.
-        """
+        """Generate just the CTA."""
         result = await self.generate_personalization(normalized_profile)
         return result.get("cta", "")
+
+    def should_use_opus(self, profile: Dict[str, Any]) -> bool:
+        """
+        Determine if Opus should be used based on profile quality.
+
+        Uses Opus for:
+        - High data quality scores
+        - VIP domains (can be configured)
+        - Complex industry contexts
+
+        Args:
+            profile: Normalized profile data
+
+        Returns:
+            True if Opus should be used
+        """
+        quality_score = profile.get("data_quality_score", 0)
+
+        # Use Opus for high-quality profiles
+        if quality_score >= 0.8:
+            return True
+
+        # Check for VIP domains (example)
+        vip_domains = ["google.com", "microsoft.com", "apple.com", "amazon.com"]
+        domain = profile.get("domain", "")
+        if domain in vip_domains:
+            return True
+
+        return False
