@@ -38,6 +38,11 @@ function HomeContent() {
   const [personalizationData, setPersonalizationData] = useState<PersonalizationData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const handleReset = () => {
+    setPersonalizationData(null);
+    setError(null);
+  };
+
   // Get API URLs from environment
   const getSupabaseUrl = () => {
     const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -209,7 +214,7 @@ function HomeContent() {
         )}
 
         {personalizationData && (
-          <PersonalizedContent data={personalizationData} error={error} />
+          <PersonalizedContent data={personalizationData} error={error} onReset={handleReset} />
         )}
 
         {error && !personalizationData && (

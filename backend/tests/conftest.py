@@ -3,13 +3,19 @@ Pytest configuration and fixtures.
 Provides mocked Supabase client and FastAPI test client.
 """
 
+import os
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from fastapi.testclient import TestClient
 
+# Set mock mode BEFORE importing services
+os.environ["MOCK_SUPABASE"] = "true"
+os.environ["SUPABASE_URL"] = "http://localhost:54321"
+os.environ["SUPABASE_KEY"] = "mock-test-key"
+
 # Import app and services
 from app.main import app
-from app.services.supabase_client import SupabaseClient
+from app.services.supabase_client import SupabaseClient, get_supabase_client
 from app.services.rad_orchestrator import RADOrchestrator
 from app.services.llm_service import LLMService
 
@@ -17,61 +23,20 @@ from app.services.llm_service import LLMService
 @pytest.fixture
 def mock_supabase():
     """
-    Fixture: Mocked Supabase client.
-    All DB calls are mocked; no real Supabase connection.
+    Fixture: Supabase client in mock mode.
+    Uses in-memory storage; no real Supabase connection.
     """
-    client = MagicMock(spec=SupabaseClient)
-    
-    # Mock table operations
-    client.table = MagicMock()
-    
-    # Mock store_raw_data
-    client.store_raw_data = MagicMock(return_value={
-        "email": "test@example.com",
-        "source": "apollo",
-        "payload": {"name": "John Doe"}
-    })
-    
-    # Mock get_raw_data_for_email
-    client.get_raw_data_for_email = MagicMock(return_value=[
-        {"email": "test@example.com", "source": "apollo", "payload": {}}
-    ])
-    
-    # Mock create_staging_record
-    client.create_staging_record = MagicMock(return_value={
-        "email": "test@example.com",
-        "normalized_fields": {},
-        "status": "resolving"
-    })
-    
-    # Mock update_staging_record
-    client.update_staging_record = MagicMock(return_value={
-        "email": "test@example.com",
-        "normalized_fields": {"name": "John Doe"},
-        "status": "ready"
-    })
-    
-    # Mock write_finalize_data
-    client.write_finalize_data = MagicMock(return_value={
-        "email": "test@example.com",
-        "normalized_data": {"name": "John Doe", "company": "Acme"},
-        "personalization_intro": "Hi John...",
-        "personalization_cta": "Let's chat...",
-        "data_sources": ["apollo", "pdl"]
-    })
-    
-    # Mock get_finalize_data
-    client.get_finalize_data = MagicMock(return_value={
-        "email": "test@example.com",
-        "normalized_data": {"name": "John Doe", "company": "Acme"},
-        "personalization_intro": "Hi John...",
-        "personalization_cta": "Let's chat...",
-        "resolved_at": "2025-01-27T00:00:00"
-    })
-    
-    # Mock health_check
-    client.health_check = MagicMock(return_value=True)
-    
+    # Create a fresh client instance (will use mock mode due to env vars)
+    client = SupabaseClient()
+
+    # Clear any existing mock data
+    client._mock_raw_data = []
+    client._mock_staging = []
+    client._mock_finalize = []
+    client._mock_jobs = []
+    client._mock_outputs = []
+    client._mock_pdfs = []
+
     return client
 
 
@@ -83,16 +48,13 @@ def test_client(mock_supabase):
     # Patch the get_supabase_client dependency
     def mock_get_supabase():
         return mock_supabase
-    
-    from fastapi.testclient import TestClient
-    from app.services.supabase_client import get_supabase_client
-    
+
     app.dependency_overrides[get_supabase_client] = mock_get_supabase
-    
+
     client = TestClient(app)
-    
+
     yield client
-    
+
     # Cleanup
     app.dependency_overrides.clear()
 

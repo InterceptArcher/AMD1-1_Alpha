@@ -9,9 +9,10 @@ interface PersonalizationData {
 interface PersonalizedContentProps {
   data: PersonalizationData | null;
   error?: string | null;
+  onReset?: () => void;
 }
 
-export default function PersonalizedContent({ data, error }: PersonalizedContentProps) {
+export default function PersonalizedContent({ data, error, onReset }: PersonalizedContentProps) {
   if (error) {
     return (
       <div className="rounded-lg border border-red-200 bg-red-50 p-6">
@@ -87,6 +88,15 @@ export default function PersonalizedContent({ data, error }: PersonalizedContent
         <p className="text-center text-xs text-gray-400">
           Your personalized ebook will be delivered instantly
         </p>
+
+        {onReset && (
+          <button
+            onClick={onReset}
+            className="w-full text-sm text-gray-500 hover:text-gray-700 underline"
+          >
+            Try with a different email
+          </button>
+        )}
       </div>
     </div>
   );

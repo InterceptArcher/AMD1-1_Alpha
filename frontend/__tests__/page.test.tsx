@@ -14,25 +14,34 @@ describe('Home Page', () => {
     mockSearchParams.clear();
   });
 
-  it('renders the landing page with welcome heading', () => {
+  it('renders the landing page with ebook heading', () => {
     render(<Home />);
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/welcome/i);
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/get your free ebook/i);
   });
 
-  it('displays default CTA message when no cta parameter provided', () => {
+  it('displays default message when no cta parameter provided', () => {
     render(<Home />);
-    expect(screen.getByText(/default/i)).toBeInTheDocument();
+    expect(screen.getByText(/personalized insights/i)).toBeInTheDocument();
   });
 
   it('displays the cta value from query string when provided', () => {
-    mockSearchParams.set('cta', 'compare');
+    mockSearchParams.set('cta', 'Compare solutions for your team');
     render(<Home />);
-    expect(screen.getByText(/compare/i)).toBeInTheDocument();
+    expect(screen.getByText(/compare solutions/i)).toBeInTheDocument();
   });
 
-  it('handles different cta values correctly', () => {
-    mockSearchParams.set('cta', 'download');
+  it('renders email form', () => {
     render(<Home />);
-    expect(screen.getByText(/download/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
+  });
+
+  it('renders consent checkbox', () => {
+    render(<Home />);
+    expect(screen.getByRole('checkbox')).toBeInTheDocument();
+  });
+
+  it('renders submit button', () => {
+    render(<Home />);
+    expect(screen.getByRole('button', { name: /get personalized content/i })).toBeInTheDocument();
   });
 });

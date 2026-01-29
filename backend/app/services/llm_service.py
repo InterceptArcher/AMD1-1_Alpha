@@ -251,13 +251,54 @@ No other text."""
         """Generate mock response when API key not configured."""
         logger.info("LLM: Using mock response (no API key)")
 
-        first_name = profile.get("first_name", "there")
-        company = profile.get("company_name", "your company")
-        title = profile.get("title", "professional")
+        first_name = profile.get("first_name", "")
+        company = profile.get("company", profile.get("company_name", ""))
+        title = profile.get("title", "")
+        industry = profile.get("industry", "Technology")
+        company_size = profile.get("company_size", "")
+
+        # Industry-specific hooks
+        industry_hooks = {
+            "Technology": "Technology professionals like you are constantly seeking strategic insights to drive innovation.",
+            "Finance": "In the fast-paced world of finance, staying ahead means having the right insights at the right time.",
+            "Healthcare": "Healthcare leaders face unique challenges that require innovative solutions and fresh perspectives.",
+            "Marketing": "In today's competitive landscape, marketing leaders need data-driven strategies that deliver results.",
+            "Sales": "Top-performing sales teams share common strategies that set them apart from the competition.",
+            "Consulting": "As a consulting professional, you know that delivering value means staying ahead of industry trends.",
+            "Manufacturing": "Manufacturing leaders are transforming their operations with cutting-edge strategies.",
+            "Retail": "Retail is evolving rapidly, and the most successful leaders are those who adapt quickly.",
+            "Education": "Education professionals are reshaping how we learn and grow in the modern world.",
+        }
+
+        # Size-specific context
+        size_context = {
+            "1-10": "growing startups",
+            "11-50": "scaling companies",
+            "50-200": "mid-size organizations",
+            "201-500": "established enterprises",
+            "500+": "large organizations",
+        }
+
+        # Build personalized intro
+        base_hook = industry_hooks.get(industry, "Professionals in your field are discovering new ways to drive results.")
+
+        if first_name and company:
+            intro = f"{base_hook} At {company}, you're positioned to leverage these insights for real impact."
+        elif first_name:
+            intro = f"{base_hook} Discover how leading professionals are tackling today's challenges."
+        else:
+            intro = base_hook
+
+        # Build personalized CTA
+        size_phrase = size_context.get(company_size, "successful teams")
+        if title:
+            cta = f"Download your free ebook and see how other {title}s at {size_phrase} are driving results"
+        else:
+            cta = f"Get your free insights and unlock actionable strategies for your team"
 
         return {
-            "intro_hook": f"Hi {first_name}, I noticed you're leading initiatives at {company}. This guide covers strategies that align with your role.",
-            "cta": f"Ready to explore how other {title}s are approaching this? Let's connect.",
+            "intro_hook": intro[:MAX_INTRO_LENGTH],  # Truncate to max length
+            "cta": cta[:MAX_CTA_LENGTH],
             "model_used": "mock",
             "tokens_used": 0,
             "latency_ms": 0,
