@@ -414,6 +414,12 @@ startxref
 
         storage_path = f"{self.storage_bucket}/{filename}"
 
+        # Handle mock mode - return mock URL without actual storage
+        if getattr(self.supabase, 'mock_mode', False) or self.supabase.client is None:
+            logger.info(f"[MOCK] Would store PDF at {storage_path}")
+            mock_url = f"https://mock-storage.example.com/{storage_path}?token=mock-signed-url"
+            return storage_path, mock_url
+
         try:
             # Upload to Supabase Storage
             self.supabase.client.storage.from_(self.storage_bucket).upload(
@@ -448,6 +454,10 @@ startxref
         """
         if not self.supabase:
             return None
+
+        # Handle mock mode
+        if getattr(self.supabase, 'mock_mode', False) or self.supabase.client is None:
+            return f"https://mock-storage.example.com/{storage_path}?token=mock-signed-url"
 
         try:
             filename = storage_path.split("/")[-1]

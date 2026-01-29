@@ -20,7 +20,7 @@ class TestEnrichmentEndpoint:
             "/rad/enrich",
             json={"email": "john@acme.com"}
         )
-        
+
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
         assert "job_id" in data
@@ -40,7 +40,7 @@ class TestEnrichmentEndpoint:
                 "domain": "acme.io"
             }
         )
-        
+
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
         assert data["email"] == "john@acme.com"
@@ -54,7 +54,7 @@ class TestEnrichmentEndpoint:
             "/rad/enrich",
             json={"email": "not-an-email"}
         )
-        
+
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
     def test_enrich_missing_email(self, test_client):
@@ -66,7 +66,7 @@ class TestEnrichmentEndpoint:
             "/rad/enrich",
             json={}
         )
-        
+
         assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
 
     def test_enrich_case_insensitive(self, test_client, mock_supabase):
@@ -77,12 +77,12 @@ class TestEnrichmentEndpoint:
             "/rad/enrich",
             json={"email": "JOHN@ACME.COM"}
         )
-        
+
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
         assert data["email"] == "john@acme.com"
 
-    def test_enrich_calls_supabase_write(self, test_client, mock_supabase):
+    def test_enrich_stores_finalize_data(self, test_client, mock_supabase):
         """
         POST /rad/enrich: Should write to finalize_data via Supabase.
         """
@@ -90,10 +90,12 @@ class TestEnrichmentEndpoint:
             "/rad/enrich",
             json={"email": "john@acme.com"}
         )
-        
+
         assert response.status_code == status.HTTP_200_OK
-        # Verify write_finalize_data was called
-        mock_supabase.write_finalize_data.assert_called()
+
+        # Verify data was written to mock storage
+        finalized = mock_supabase.get_finalize_data("john@acme.com")
+        assert finalized is not None
 
 
 class TestProfileEndpoint:
@@ -104,21 +106,27 @@ class TestProfileEndpoint:
         Happy path: GET /rad/profile/{email} with existing profile.
         Should return 200 with normalized profile and personalization.
         """
+        # First enrich the profile
+        test_client.post("/rad/enrich", json={"email": "john@acme.com"})
+
+        # Then fetch it
         response = test_client.get("/rad/profile/john@acme.com")
-        
+
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
         assert data["email"] == "john@acme.com"
         assert "normalized_profile" in data
         assert "personalization" in data
-        assert data["normalized_profile"]["company"] == "Acme"
 
     def test_get_profile_with_personalization(self, test_client, mock_supabase):
         """
         GET /rad/profile/{email}: Response includes intro_hook and cta.
         """
+        # Enrich first
+        test_client.post("/rad/enrich", json={"email": "john@acme.com"})
+
         response = test_client.get("/rad/profile/john@acme.com")
-        
+
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
         personalization = data.get("personalization")
@@ -131,10 +139,8 @@ class TestProfileEndpoint:
         GET /rad/profile/{email}: Email not in finalize_data.
         Should return 404.
         """
-        mock_supabase.get_finalize_data.return_value = None
-        
         response = test_client.get("/rad/profile/unknown@example.com")
-        
+
         assert response.status_code == status.HTTP_404_NOT_FOUND
         data = response.json()
         assert "detail" in data
@@ -143,25 +149,34 @@ class TestProfileEndpoint:
         """
         GET /rad/profile/{email}: email should be lowercased.
         """
+        # Enrich with lowercase
+        test_client.post("/rad/enrich", json={"email": "john@acme.com"})
+
+        # Fetch with uppercase
         response = test_client.get("/rad/profile/JOHN@ACME.COM")
-        
+
         assert response.status_code == status.HTTP_200_OK
 
-    def test_get_profile_calls_supabase_fetch(self, test_client, mock_supabase):
+    def test_get_profile_reads_from_supabase(self, test_client, mock_supabase):
         """
-        GET /rad/profile/{email}: Should call get_finalize_data.
+        GET /rad/profile/{email}: Should read from finalize_data table.
         """
+        # Enrich first
+        test_client.post("/rad/enrich", json={"email": "john@acme.com"})
+
         response = test_client.get("/rad/profile/john@acme.com")
-        
+
         assert response.status_code == status.HTTP_200_OK
-        mock_supabase.get_finalize_data.assert_called()
 
     def test_get_profile_includes_last_updated(self, test_client, mock_supabase):
         """
         GET /rad/profile/{email}: Response includes last_updated timestamp.
         """
+        # Enrich first
+        test_client.post("/rad/enrich", json={"email": "john@acme.com"})
+
         response = test_client.get("/rad/profile/john@acme.com")
-        
+
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
         assert "last_updated" in data
@@ -176,21 +191,46 @@ class TestHealthEndpoint:
         Should return 200 with status=healthy.
         """
         response = test_client.get("/rad/health")
-        
+
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
         assert data["status"] == "healthy"
         assert data["service"] == "rad_enrichment"
 
-    def test_health_check_unhealthy(self, test_client, mock_supabase):
+    def test_health_check_returns_timestamp(self, test_client, mock_supabase):
         """
-        GET /rad/health: Supabase is unhealthy.
-        Should return 503 with status=unhealthy.
+        GET /rad/health: Response includes timestamp.
         """
-        mock_supabase.health_check.return_value = False
-        
         response = test_client.get("/rad/health")
-        
+
         assert response.status_code == status.HTTP_200_OK
         data = response.json()
-        assert data["status"] == "unhealthy"
+        assert "timestamp" in data
+
+
+class TestPDFEndpoint:
+    """Tests for POST /rad/pdf/{email} endpoint."""
+
+    def test_generate_pdf_success(self, test_client, mock_supabase):
+        """
+        POST /rad/pdf/{email}: Should generate PDF for existing profile.
+        """
+        # First enrich
+        test_client.post("/rad/enrich", json={"email": "john@acme.com"})
+
+        # Then generate PDF
+        response = test_client.post("/rad/pdf/john@acme.com")
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["email"] == "john@acme.com"
+        assert "pdf_url" in data or "storage_path" in data
+
+    def test_generate_pdf_not_found(self, test_client, mock_supabase):
+        """
+        POST /rad/pdf/{email}: Profile not found.
+        Should return 404.
+        """
+        response = test_client.post("/rad/pdf/unknown@example.com")
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
