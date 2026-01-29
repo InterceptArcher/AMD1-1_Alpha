@@ -129,77 +129,48 @@ function HomeContent() {
     setLoadingMessage('Submitting your request...');
 
     try {
-      const supabaseUrl = getSupabaseUrl();
       const apiUrl = getApiUrl();
+      console.log('Using API URL:', apiUrl);
 
-      let jobId: number | null = null;
+      // Call backend directly
+      setLoadingMessage('Enriching your profile...');
+      const response = await fetch(`${apiUrl}/rad/enrich`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email, cta: cta || 'default' }),
+      });
 
-      // Try Supabase Edge Function first
-      if (supabaseUrl) {
-        try {
-          const response = await fetch(`${supabaseUrl}/submit-form`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'apikey': process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '',
-            },
-            body: JSON.stringify({
-              email,
-              cta: cta || 'default',
-              consent: true,
-            }),
-          });
-
-          if (response.ok) {
-            const data = await response.json();
-            jobId = data.job_id;
-            setLoadingMessage('Personalizing your content...');
-          }
-        } catch (err) {
-          console.warn('Supabase Edge Function unavailable, falling back to direct API');
-        }
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Enrich failed:', response.status, errorText);
+        throw new Error(`Failed to start personalization: ${response.status}`);
       }
 
-      // Fallback: Call Railway backend directly
-      if (!jobId) {
-        const response = await fetch(`${apiUrl}/rad/enrich`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ email, cta: cta || 'default' }),
-        });
+      // Profile should be ready immediately
+      setLoadingMessage('Fetching your personalized content...');
 
-        if (!response.ok) {
-          throw new Error('Failed to start personalization');
-        }
+      const profileResponse = await fetch(`${apiUrl}/rad/profile/${encodeURIComponent(email)}`);
 
-        // Direct API call - profile should be ready immediately
-        setLoadingMessage('Fetching your personalized content...');
-
-        const profileResponse = await fetch(`${apiUrl}/rad/profile/${encodeURIComponent(email)}`);
-
-        if (!profileResponse.ok) {
-          throw new Error('Failed to fetch profile');
-        }
-
-        const profileData = await profileResponse.json();
-        setPersonalizationData({
-          intro_hook: profileData.personalization?.intro_hook || 'Welcome!',
-          cta: profileData.personalization?.cta || 'Get started today',
-          first_name: profileData.normalized_profile?.first_name,
-          company: profileData.normalized_profile?.company,
-          title: profileData.normalized_profile?.title,
-        });
-        return;
+      if (!profileResponse.ok) {
+        const errorText = await profileResponse.text();
+        console.error('Profile fetch failed:', profileResponse.status, errorText);
+        throw new Error(`Failed to fetch profile: ${profileResponse.status}`);
       }
 
-      // Poll for completion
-      const result = await pollJobStatus(jobId, email);
-      if (result) {
-        setPersonalizationData(result);
-      }
+      const profileData = await profileResponse.json();
+      console.log('Profile data:', profileData);
+
+      setPersonalizationData({
+        intro_hook: profileData.personalization?.intro_hook || 'Welcome!',
+        cta: profileData.personalization?.cta || 'Get started today',
+        first_name: profileData.normalized_profile?.first_name,
+        company: profileData.normalized_profile?.company,
+        title: profileData.normalized_profile?.title,
+      });
     } catch (err) {
+      console.error('Submit error:', err);
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
       setIsLoading(false);
