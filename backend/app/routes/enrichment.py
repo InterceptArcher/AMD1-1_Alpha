@@ -76,6 +76,10 @@ async def enrich_profile(
         # Run enrichment (sync in alpha, could be async/queued later)
         finalized = await orchestrator.enrich(email, domain)
 
+        # Log which data sources returned real vs mock data
+        logger.info(f"[{job_id}] Data sources used: {orchestrator.data_sources}")
+        logger.info(f"[{job_id}] Quality score: {finalized.get('data_quality_score', 0)}")
+
         # Override enriched data with user-provided info (more reliable than API data)
         if request.firstName:
             finalized["first_name"] = request.firstName
@@ -153,12 +157,26 @@ async def enrich_profile(
         
         logger.info(f"[{job_id}] Enrichment completed for {email}")
         
-        return EnrichmentResponse(
+        # Build response with data source info
+        response = EnrichmentResponse(
             job_id=job_id,
             email=email,
             status="completed",
             created_at=datetime.utcnow()
         )
+
+        # Add extra info about data sources (for debugging)
+        return {
+            **response.model_dump(),
+            "data_sources": orchestrator.data_sources,
+            "data_quality_score": finalized.get("data_quality_score", 0),
+            "enriched_fields": {
+                "first_name": finalized.get("first_name"),
+                "company_name": finalized.get("company_name"),
+                "title": finalized.get("title"),
+                "industry": finalized.get("industry"),
+            }
+        }
         
     except ValueError as e:
         logger.warning(f"Validation error for enrichment: {e}")
