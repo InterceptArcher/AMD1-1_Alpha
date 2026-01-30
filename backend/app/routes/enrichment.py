@@ -283,6 +283,44 @@ async def health_check(supabase: SupabaseClient = Depends(get_supabase_client)) 
         )
 
 
+@router.get("/status")
+async def api_status() -> dict:
+    """
+    GET /rad/status
+
+    Check status of all configured APIs and services.
+    Shows which APIs have real keys vs using mock data.
+    """
+    from app.config import settings
+
+    def check_key(key: str) -> str:
+        value = getattr(settings, key, None)
+        if value and len(value) > 4:
+            return f"configured ({value[:4]}...)"
+        return "not set (using mock)"
+
+    return {
+        "timestamp": datetime.utcnow().isoformat(),
+        "enrichment_apis": {
+            "apollo": check_key("APOLLO_API_KEY"),
+            "pdl": check_key("PDL_API_KEY"),
+            "hunter": check_key("HUNTER_API_KEY"),
+            "tavily": check_key("TAVILY_API_KEY"),
+            "zoominfo": check_key("ZOOMINFO_API_KEY"),
+        },
+        "llm_providers": {
+            "anthropic": check_key("ANTHROPIC_API_KEY"),
+            "openai": check_key("OPENAI_API_KEY"),
+            "gemini": check_key("GEMINI_API_KEY"),
+        },
+        "database": {
+            "supabase_url": "configured" if settings.SUPABASE_URL else "not set",
+            "supabase_key": "configured" if settings.SUPABASE_KEY else "not set",
+        },
+        "mode": "mock" if settings.MOCK_MODE else "production"
+    }
+
+
 @router.post(
     "/pdf/{email}",
     responses={
