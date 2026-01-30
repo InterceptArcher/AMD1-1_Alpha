@@ -309,6 +309,7 @@ async def api_status() -> dict:
     Check status of all configured APIs and services.
     Shows which APIs have real keys vs using mock data.
     """
+    import os
     from app.config import settings
 
     def check_key(key: str) -> str:
@@ -316,6 +317,14 @@ async def api_status() -> dict:
         if value and len(value) > 4:
             return f"configured ({value[:4]}...)"
         return "not set (using mock)"
+
+    # Also check raw env vars to debug case sensitivity issues
+    raw_env = {}
+    for key in ["APOLLO_API_KEY", "Apollo_API_KEY", "HUNTER_API_KEY", "Hunter_API_KEY",
+                "PDL_API_KEY", "Pdl_API_KEY", "TAVILY_API_KEY", "Tavily_API_KEY"]:
+        val = os.getenv(key)
+        if val:
+            raw_env[key] = f"set ({val[:4]}...)" if len(val) > 4 else "set (short)"
 
     return {
         "timestamp": datetime.utcnow().isoformat(),
@@ -335,6 +344,7 @@ async def api_status() -> dict:
             "supabase_url": "configured" if settings.SUPABASE_URL else "not set",
             "supabase_key": "configured" if settings.SUPABASE_KEY else "not set",
         },
+        "raw_env_vars_found": raw_env if raw_env else "none detected",
         "mode": "mock" if settings.MOCK_MODE else "production"
     }
 
