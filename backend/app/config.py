@@ -18,13 +18,13 @@ class Settings:
     SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
     SUPABASE_JWT_SECRET: str = os.getenv("SUPABASE_JWT_SECRET", "")
 
-    # External Enrichment APIs
-    APOLLO_API_KEY: Optional[str] = os.getenv("APOLLO_API_KEY")
-    PDL_API_KEY: Optional[str] = os.getenv("PDL_API_KEY")
-    HUNTER_API_KEY: Optional[str] = os.getenv("HUNTER_API_KEY")
-    TAVILY_API_KEY: Optional[str] = os.getenv("TAVILY_API_KEY")
-    ZOOMINFO_API_KEY: Optional[str] = os.getenv("ZOOMINFO_API_KEY")
-    GNEWS_API_KEY: Optional[str] = os.getenv("GNEWS_API_KEY")  # deprecated, use Tavily
+    # External Enrichment APIs (check both uppercase and mixed case)
+    APOLLO_API_KEY: Optional[str] = os.getenv("APOLLO_API_KEY") or os.getenv("Apollo_API_KEY")
+    PDL_API_KEY: Optional[str] = os.getenv("PDL_API_KEY") or os.getenv("Pdl_API_KEY")
+    HUNTER_API_KEY: Optional[str] = os.getenv("HUNTER_API_KEY") or os.getenv("Hunter_API_KEY")
+    TAVILY_API_KEY: Optional[str] = os.getenv("TAVILY_API_KEY") or os.getenv("Tavily_API_KEY")
+    ZOOMINFO_API_KEY: Optional[str] = os.getenv("ZOOMINFO_API_KEY") or os.getenv("ZoomInfo_API_KEY")
+    GNEWS_API_KEY: Optional[str] = os.getenv("GNEWS_API_KEY") or os.getenv("GNews_API_KEY")
 
     # LLM Configuration (multi-provider with fallback)
     ANTHROPIC_API_KEY: Optional[str] = os.getenv("ANTHROPIC_API_KEY")
