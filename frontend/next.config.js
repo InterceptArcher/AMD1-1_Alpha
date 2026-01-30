@@ -2,7 +2,9 @@
 const nextConfig = {
   reactStrictMode: true,
   async rewrites() {
-    const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    // Use env var if set, otherwise use Render backend URL
+    const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'https://amd1-1-backend.onrender.com';
+    console.log('Backend URL for rewrites:', backendUrl);
     return [
       {
         source: '/api/rad/:path*',
