@@ -1,7 +1,7 @@
 'use client';
 
 import { useSearchParams } from 'next/navigation';
-import { Suspense, useState, useCallback } from 'react';
+import { Suspense, useState } from 'react';
 import EmailConsentForm, { UserInputs } from '@/components/EmailConsentForm';
 import LoadingSpinner from '@/components/LoadingSpinner';
 import PersonalizedContent from '@/components/PersonalizedContent';
@@ -15,134 +15,52 @@ interface PersonalizationData {
   email?: string;
 }
 
-interface JobStatus {
-  job_id: number;
-  email: string;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
-  error_message?: string;
-  personalization?: {
-    intro_hook: string;
-    cta: string;
-    normalized_data?: Record<string, unknown>;
-  };
+interface UserContext {
+  firstName?: string;
+  company?: string;
+  industry?: string;
+  persona?: string;
+  goal?: string;
 }
-
-const POLL_INTERVAL = 2000; // 2 seconds
-const MAX_POLL_ATTEMPTS = 30; // 60 seconds max
 
 function HomeContent() {
   const searchParams = useSearchParams();
   const cta = searchParams.get('cta');
 
   const [isLoading, setIsLoading] = useState(false);
-  const [loadingMessage, setLoadingMessage] = useState('Personalizing your content...');
+  const [userContext, setUserContext] = useState<UserContext | null>(null);
   const [personalizationData, setPersonalizationData] = useState<PersonalizationData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleReset = () => {
     setPersonalizationData(null);
+    setUserContext(null);
     setError(null);
   };
 
-  // Get API URLs from environment
-  const getSupabaseUrl = () => {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    return url ? `${url}/functions/v1` : null;
-  };
-
   const getApiUrl = () => {
-    // Use relative URL to leverage Next.js proxy (avoids CORS/port issues in Codespaces)
+    // Use relative URL to leverage Next.js proxy (avoids CORS/port issues)
     return '/api';
   };
-
-  // Poll for job completion
-  const pollJobStatus = useCallback(async (jobId: number, email: string): Promise<PersonalizationData | null> => {
-    const supabaseUrl = getSupabaseUrl();
-    const apiUrl = getApiUrl();
-
-    for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
-      await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
-
-      try {
-        // Try Supabase Edge Function first
-        if (supabaseUrl) {
-          const response = await fetch(
-            `${supabaseUrl}/get-job-status?job_id=${jobId}`,
-            {
-              headers: {
-                'Content-Type': 'application/json',
-                'apikey': process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '',
-              },
-            }
-          );
-
-          if (response.ok) {
-            const status: JobStatus = await response.json();
-
-            if (status.status === 'completed' && status.personalization) {
-              const normalizedData = status.personalization.normalized_data as Record<string, string> | undefined;
-              return {
-                intro_hook: status.personalization.intro_hook,
-                cta: status.personalization.cta,
-                first_name: normalizedData?.first_name,
-                company: normalizedData?.company_name || normalizedData?.company,
-                title: normalizedData?.title,
-                email: email,
-              };
-            }
-
-            if (status.status === 'failed') {
-              throw new Error(status.error_message || 'Personalization failed');
-            }
-
-            // Update loading message based on status
-            if (status.status === 'processing') {
-              setLoadingMessage('Enriching your profile...');
-            }
-
-            continue;
-          }
-        }
-
-        // Fallback: Poll Railway backend directly
-        const profileResponse = await fetch(`${apiUrl}/rad/profile/${encodeURIComponent(email)}`);
-
-        if (profileResponse.ok) {
-          const profileData = await profileResponse.json();
-          if (profileData.personalization) {
-            return {
-              intro_hook: profileData.personalization.intro_hook || 'Welcome!',
-              cta: profileData.personalization.cta || 'Get started today',
-              first_name: profileData.normalized_profile?.first_name,
-              company: profileData.normalized_profile?.company,
-              title: profileData.normalized_profile?.title,
-              email: email,
-            };
-          }
-        }
-      } catch (err) {
-        console.error('Poll error:', err);
-        // Continue polling unless it's a definitive failure
-        if (err instanceof Error && err.message.includes('failed')) {
-          throw err;
-        }
-      }
-    }
-
-    throw new Error('Personalization timed out. Please try again.');
-  }, []);
 
   const handleSubmit = async (inputs: UserInputs) => {
     setIsLoading(true);
     setError(null);
-    setLoadingMessage('Submitting your request...');
+
+    // Set user context immediately for personalized loading
+    setUserContext({
+      firstName: inputs.firstName,
+      company: inputs.company,
+      industry: inputs.industry,
+      persona: inputs.persona,
+      goal: inputs.goal,
+    });
 
     try {
       const apiUrl = getApiUrl();
-      console.log('Using API URL:', apiUrl);
+      console.log('Submitting to API:', apiUrl);
 
       // Call backend with all user inputs
-      setLoadingMessage('Enriching your profile...');
       const response = await fetch(`${apiUrl}/rad/enrich`, {
         method: 'POST',
         headers: {
@@ -152,6 +70,7 @@ function HomeContent() {
           email: inputs.email,
           firstName: inputs.firstName,
           lastName: inputs.lastName,
+          company: inputs.company,
           goal: inputs.goal,
           persona: inputs.persona,
           industry: inputs.industry,
@@ -165,9 +84,7 @@ function HomeContent() {
         throw new Error(`Failed to start personalization: ${response.status}`);
       }
 
-      // Profile should be ready immediately
-      setLoadingMessage('Generating your personalized ebook...');
-
+      // Profile should be ready - fetch it
       const profileResponse = await fetch(`${apiUrl}/rad/profile/${encodeURIComponent(inputs.email)}`);
 
       if (!profileResponse.ok) {
@@ -182,8 +99,8 @@ function HomeContent() {
       setPersonalizationData({
         intro_hook: profileData.personalization?.intro_hook || 'Welcome!',
         cta: profileData.personalization?.cta || 'Get started today',
-        first_name: profileData.normalized_profile?.first_name,
-        company: profileData.normalized_profile?.company,
+        first_name: inputs.firstName || profileData.normalized_profile?.first_name,
+        company: inputs.company || profileData.normalized_profile?.company,
         title: profileData.normalized_profile?.title,
         email: inputs.email,
       });
@@ -198,7 +115,7 @@ function HomeContent() {
   return (
     <main className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-gray-50 to-white p-8">
       <div className="w-full max-w-md space-y-8">
-        {!personalizationData && (
+        {!personalizationData && !isLoading && (
           <div className="text-center">
             <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-blue-100">
               <svg className="h-8 w-8 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -222,16 +139,22 @@ function HomeContent() {
         )}
 
         {isLoading && (
-          <LoadingSpinner message={loadingMessage} />
+          <LoadingSpinner userContext={userContext || undefined} />
         )}
 
         {personalizationData && (
           <PersonalizedContent data={personalizationData} error={error} onReset={handleReset} />
         )}
 
-        {error && !personalizationData && (
+        {error && !personalizationData && !isLoading && (
           <div className="rounded-md bg-red-50 p-4">
             <p className="text-sm text-red-700">{error}</p>
+            <button
+              onClick={handleReset}
+              className="mt-2 text-sm text-red-600 underline hover:text-red-800"
+            >
+              Try again
+            </button>
           </div>
         )}
       </div>

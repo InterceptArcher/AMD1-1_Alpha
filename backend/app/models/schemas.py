@@ -18,13 +18,14 @@ class EnrichmentRequest(BaseModel):
     """
     email: EmailStr = Field(..., description="Email address to enrich")
     domain: Optional[str] = Field(None, description="Company domain (optional; derived from email if absent)")
-    # User-provided name (more reliable than API enrichment)
+    # User-provided info (more reliable than API enrichment)
     firstName: Optional[str] = Field(None, description="User's first name")
     lastName: Optional[str] = Field(None, description="User's last name")
+    company: Optional[str] = Field(None, description="User's company name")
     # User-provided context for better personalization
-    goal: Optional[str] = Field(None, description="User's primary goal (exploring, evaluating, learning, building_case)")
-    persona: Optional[str] = Field(None, description="User's role (executive, it_infrastructure, security, data_ai, etc.)")
-    industry: Optional[str] = Field(None, description="User's industry (healthcare, financial_services, technology, etc.)")
+    goal: Optional[str] = Field(None, description="Buying stage (awareness, consideration, decision, implementation)")
+    persona: Optional[str] = Field(None, description="User's role (c_suite, vp_director, it_infrastructure, engineering, data_ai, security, procurement)")
+    industry: Optional[str] = Field(None, description="User's industry (technology, financial_services, healthcare, retail_ecommerce, manufacturing, etc.)")
     cta: Optional[str] = Field(None, description="Campaign CTA context")
 
     class Config:
@@ -33,10 +34,11 @@ class EnrichmentRequest(BaseModel):
                 "email": "john@acme.com",
                 "firstName": "John",
                 "lastName": "Smith",
+                "company": "Acme Corp",
                 "domain": "acme.com",
-                "goal": "evaluating",
-                "persona": "executive",
-                "industry": "healthcare"
+                "goal": "consideration",
+                "persona": "c_suite",
+                "industry": "technology"
             }
         }
 

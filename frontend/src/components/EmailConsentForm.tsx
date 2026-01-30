@@ -6,6 +6,7 @@ export interface UserInputs {
   email: string;
   firstName: string;
   lastName: string;
+  company: string;
   goal: string;
   persona: string;
   industry: string;
@@ -16,36 +17,41 @@ interface EmailConsentFormProps {
   isLoading?: boolean;
 }
 
+// Buying stage - helps LLM tailor urgency and depth of content
 const GOAL_OPTIONS = [
-  { value: '', label: 'Select your primary goal...' },
-  { value: 'exploring', label: 'Exploring modernization options' },
-  { value: 'evaluating', label: 'Comparing approaches for my organization' },
-  { value: 'learning', label: 'Understanding best practices and trends' },
-  { value: 'building_case', label: 'Building a business case internally' },
+  { value: '', label: 'Select your current stage...' },
+  { value: 'awareness', label: 'Just starting to research' },
+  { value: 'consideration', label: 'Actively evaluating options' },
+  { value: 'decision', label: 'Ready to make a decision' },
+  { value: 'implementation', label: 'Already implementing, need guidance' },
 ];
 
+// Role/Persona - helps LLM customize technical depth and focus areas
 const PERSONA_OPTIONS = [
   { value: '', label: 'Select your role...' },
-  { value: 'executive', label: 'Executive Leadership (C-suite, VP)' },
-  { value: 'it_infrastructure', label: 'IT / Infrastructure' },
-  { value: 'security', label: 'Security' },
-  { value: 'data_ai', label: 'Data / AI / Engineering' },
-  { value: 'sales_gtm', label: 'Sales / GTM / Revenue Ops' },
-  { value: 'hr_people', label: 'HR / People Ops' },
+  { value: 'c_suite', label: 'C-Suite / Executive (CEO, CTO, CIO, CFO)' },
+  { value: 'vp_director', label: 'VP / Director' },
+  { value: 'it_infrastructure', label: 'IT / Infrastructure Manager' },
+  { value: 'engineering', label: 'Engineering / DevOps' },
+  { value: 'data_ai', label: 'Data Science / AI / ML' },
+  { value: 'security', label: 'Security / Compliance' },
+  { value: 'procurement', label: 'Procurement / Vendor Management' },
   { value: 'other', label: 'Other' },
 ];
 
+// Industry - maps to case studies and specific pain points
 const INDUSTRY_OPTIONS = [
   { value: '', label: 'Select your industry...' },
-  { value: 'healthcare', label: 'Healthcare' },
-  { value: 'financial_services', label: 'Financial Services' },
-  { value: 'technology', label: 'Technology / SaaS' },
-  { value: 'gaming_media', label: 'Gaming / Media' },
-  { value: 'manufacturing', label: 'Manufacturing' },
-  { value: 'retail', label: 'Retail / Consumer' },
+  { value: 'technology', label: 'Technology / Software / SaaS' },
+  { value: 'financial_services', label: 'Financial Services / Banking / Insurance' },
+  { value: 'healthcare', label: 'Healthcare / Life Sciences / Pharma' },
+  { value: 'retail_ecommerce', label: 'Retail / E-commerce' },
+  { value: 'manufacturing', label: 'Manufacturing / Industrial' },
+  { value: 'telecommunications', label: 'Telecommunications / Media' },
+  { value: 'energy_utilities', label: 'Energy / Utilities' },
   { value: 'government', label: 'Government / Public Sector' },
-  { value: 'energy', label: 'Energy / Utilities' },
-  { value: 'telecommunications', label: 'Telecommunications' },
+  { value: 'education', label: 'Education / Research' },
+  { value: 'professional_services', label: 'Professional Services / Consulting' },
   { value: 'other', label: 'Other' },
 ];
 
@@ -53,6 +59,7 @@ export default function EmailConsentForm({ onSubmit, isLoading = false }: EmailC
   const [email, setEmail] = useState('');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
+  const [company, setCompany] = useState('');
   const [goal, setGoal] = useState('');
   const [persona, setPersona] = useState('');
   const [industry, setIndustry] = useState('');
@@ -89,13 +96,14 @@ export default function EmailConsentForm({ onSubmit, isLoading = false }: EmailC
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (isFormValid) {
-      onSubmit({ email, firstName, lastName, goal, persona, industry });
+      onSubmit({ email, firstName, lastName, company, goal, persona, industry });
     }
   };
 
   const isEmailValid = email.length > 0 && validateEmail(email);
   const isNameValid = firstName.length > 0 && lastName.length > 0;
-  const isFormValid = isEmailValid && isNameValid && consent && goal && persona && industry;
+  const isCompanyValid = company.length > 0;
+  const isFormValid = isEmailValid && isNameValid && isCompanyValid && consent && goal && persona && industry;
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
@@ -139,6 +147,26 @@ export default function EmailConsentForm({ onSubmit, isLoading = false }: EmailC
         </div>
       </div>
 
+      {/* Company Input */}
+      <div>
+        <label
+          htmlFor="company"
+          className="block text-sm font-medium text-gray-700"
+        >
+          Company
+        </label>
+        <input
+          type="text"
+          id="company"
+          name="company"
+          placeholder="Acme Corp"
+          value={company}
+          onChange={(e) => setCompany(e.target.value)}
+          disabled={isLoading}
+          className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+        />
+      </div>
+
       {/* Email Input */}
       <div>
         <label
@@ -166,23 +194,23 @@ export default function EmailConsentForm({ onSubmit, isLoading = false }: EmailC
         )}
       </div>
 
-      {/* Primary Goal Dropdown */}
+      {/* Industry Dropdown */}
       <div>
         <label
-          htmlFor="goal"
+          htmlFor="industry"
           className="block text-sm font-medium text-gray-700"
         >
-          What brings you here today?
+          Industry
         </label>
         <select
-          id="goal"
-          name="goal"
-          value={goal}
-          onChange={(e) => setGoal(e.target.value)}
+          id="industry"
+          name="industry"
+          value={industry}
+          onChange={(e) => setIndustry(e.target.value)}
           disabled={isLoading}
           className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
         >
-          {GOAL_OPTIONS.map((option) => (
+          {INDUSTRY_OPTIONS.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
             </option>
@@ -196,7 +224,7 @@ export default function EmailConsentForm({ onSubmit, isLoading = false }: EmailC
           htmlFor="persona"
           className="block text-sm font-medium text-gray-700"
         >
-          What best describes your role?
+          Your Role
         </label>
         <select
           id="persona"
@@ -214,23 +242,23 @@ export default function EmailConsentForm({ onSubmit, isLoading = false }: EmailC
         </select>
       </div>
 
-      {/* Industry Dropdown */}
+      {/* Buying Stage Dropdown */}
       <div>
         <label
-          htmlFor="industry"
+          htmlFor="goal"
           className="block text-sm font-medium text-gray-700"
         >
-          What industry is your organization in?
+          Where are you in your journey?
         </label>
         <select
-          id="industry"
-          name="industry"
-          value={industry}
-          onChange={(e) => setIndustry(e.target.value)}
+          id="goal"
+          name="goal"
+          value={goal}
+          onChange={(e) => setGoal(e.target.value)}
           disabled={isLoading}
           className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
         >
-          {INDUSTRY_OPTIONS.map((option) => (
+          {GOAL_OPTIONS.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
             </option>
@@ -274,7 +302,9 @@ export default function EmailConsentForm({ onSubmit, isLoading = false }: EmailC
       </button>
 
       <p className="text-center text-xs text-gray-400">
-        We'll send your customized ebook to your email
+        Your ebook will be personalized for {company || 'your company'} in {
+          INDUSTRY_OPTIONS.find(i => i.value === industry)?.label.split(' /')[0] || 'your industry'
+        }
       </p>
     </form>
   );

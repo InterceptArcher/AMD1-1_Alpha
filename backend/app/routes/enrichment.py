@@ -76,17 +76,22 @@ async def enrich_profile(
         # Run enrichment (sync in alpha, could be async/queued later)
         finalized = await orchestrator.enrich(email, domain)
 
-        # Override enriched data with user-provided name (more reliable)
+        # Override enriched data with user-provided info (more reliable than API data)
         if request.firstName:
             finalized["first_name"] = request.firstName
         if request.lastName:
             finalized["last_name"] = request.lastName
+        if request.company:
+            finalized["company_name"] = request.company
+        if request.industry:
+            finalized["industry"] = request.industry
 
         # Add user-provided context to the profile for LLM
         user_context = {
             "goal": request.goal,
             "persona": request.persona,
             "industry_input": request.industry,  # User-selected industry
+            "company": request.company,  # User-provided company name
             "first_name": request.firstName,
             "last_name": request.lastName,
         }

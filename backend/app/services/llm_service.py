@@ -297,36 +297,51 @@ No other text before or after the JSON."""
         user_persona = user_context.get("persona", "")
         user_industry = user_context.get("industry_input", "")
 
-        # Goal mapping for more natural language
+        # Goal/buying stage mapping for more natural language
         goal_descriptions = {
+            "awareness": "just starting to research and explore options",
+            "consideration": "actively evaluating and comparing different solutions",
+            "decision": "ready to make a decision and need final validation",
+            "implementation": "already implementing and looking for guidance",
+            # Legacy values
             "exploring": "exploring modernization options and doing early research",
             "evaluating": "comparing different approaches for their organization",
             "learning": "learning about best practices and industry trends",
             "building_case": "building a business case to present internally"
         }
 
-        # Persona mapping for richer context
+        # Persona/role mapping for richer context
         persona_descriptions = {
+            "c_suite": "a C-suite executive (CEO, CTO, CIO, CFO) focused on strategic outcomes and ROI",
+            "vp_director": "a VP or Director level leader balancing strategy with execution",
+            "it_infrastructure": "an IT/Infrastructure manager overseeing technical operations",
+            "engineering": "an engineering or DevOps professional focused on implementation",
+            "data_ai": "a data science or AI/ML professional optimizing workloads",
+            "security": "a security or compliance professional protecting systems and data",
+            "procurement": "a procurement professional evaluating vendors and costs",
+            # Legacy values
             "executive": "an executive leader (C-suite or VP level) focused on strategic decisions",
-            "it_infrastructure": "an IT/Infrastructure professional managing technical operations",
-            "security": "a security professional focused on protecting systems and data",
-            "data_ai": "a data/AI engineer working on analytics and machine learning",
             "sales_gtm": "a sales or GTM leader driving revenue growth",
             "hr_people": "an HR/People Ops professional managing talent and culture",
             "other": "a professional seeking industry insights"
         }
 
-        # Industry-specific angles
+        # Industry-specific angles (expanded to match frontend)
         industry_angles = {
-            "healthcare": "compliance, patient outcomes, and operational efficiency",
-            "financial_services": "risk management, regulatory compliance, and digital transformation",
             "technology": "innovation velocity, scalability, and technical excellence",
-            "gaming_media": "user engagement, content delivery, and real-time performance",
+            "financial_services": "risk management, regulatory compliance, and digital transformation",
+            "healthcare": "compliance, patient outcomes, and operational efficiency",
+            "retail_ecommerce": "customer experience, omnichannel strategy, and real-time inventory",
             "manufacturing": "operational efficiency, supply chain optimization, and IoT",
-            "retail": "customer experience, omnichannel strategy, and inventory management",
+            "telecommunications": "network performance, 5G adoption, and content delivery",
+            "energy_utilities": "grid modernization, sustainability, and operational resilience",
             "government": "security, compliance, and citizen services modernization",
-            "energy": "grid modernization, sustainability, and operational resilience",
-            "telecommunications": "network performance, 5G adoption, and customer experience"
+            "education": "research computing, student outcomes, and secure data management",
+            "professional_services": "client delivery efficiency, knowledge management, and scale",
+            # Legacy values
+            "gaming_media": "user engagement, content delivery, and real-time performance",
+            "retail": "customer experience, omnichannel strategy, and inventory management",
+            "energy": "grid modernization, sustainability, and operational resilience"
         }
 
         parts.append(f"Create personalized content for this prospect:\n")
@@ -652,6 +667,11 @@ Output ONLY valid JSON:
         persona = user_context.get('persona', '')
 
         goal_map = {
+            "awareness": "early research phase, just starting to explore AI infrastructure options",
+            "consideration": "actively evaluating and comparing different solutions",
+            "decision": "ready to make a decision, needs final validation and confidence",
+            "implementation": "already implementing, looking for best practices and guidance",
+            # Legacy values
             "exploring": "early research phase, discovering what's possible with AI infrastructure",
             "evaluating": "actively comparing solutions and building a shortlist",
             "learning": "deepening expertise on best practices and implementation",
@@ -659,10 +679,15 @@ Output ONLY valid JSON:
         }
 
         persona_map = {
-            "executive": "C-suite/VP level, focused on strategic outcomes and ROI",
-            "it_infrastructure": "IT/Infrastructure professional, focused on technical implementation",
-            "security": "Security professional, focused on compliance and data protection",
+            "c_suite": "C-suite executive (CEO, CTO, CIO, CFO), focused on strategic outcomes and ROI",
+            "vp_director": "VP/Director level, balancing strategic vision with operational execution",
+            "it_infrastructure": "IT/Infrastructure manager, focused on technical implementation and operations",
+            "engineering": "Engineering/DevOps professional, focused on architecture and deployment",
             "data_ai": "Data/AI engineer, focused on model performance and compute efficiency",
+            "security": "Security/Compliance professional, focused on data protection and governance",
+            "procurement": "Procurement professional, focused on vendor evaluation and cost analysis",
+            # Legacy values
+            "executive": "C-suite/VP level, focused on strategic outcomes and ROI",
             "sales_gtm": "Sales/GTM leader, focused on revenue impact and competitive advantage",
             "hr_people": "HR/People Ops, focused on workforce enablement"
         }
