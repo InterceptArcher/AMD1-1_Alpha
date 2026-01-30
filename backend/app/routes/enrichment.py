@@ -301,6 +301,42 @@ async def health_check(supabase: SupabaseClient = Depends(get_supabase_client)) 
         )
 
 
+@router.get("/test-apis/{email}")
+async def test_apis(email: str) -> dict:
+    """
+    GET /rad/test-apis/{email}
+
+    Directly test each API and show raw results or errors.
+    For debugging API connectivity.
+    """
+    from app.services.enrichment_apis import get_enrichment_apis
+
+    apis = get_enrichment_apis()
+    domain = email.split("@")[1]
+    results = {}
+
+    for name, api in apis.items():
+        try:
+            data = await api.enrich(email, domain)
+            is_mock = data.get("_mock", False)
+            results[name] = {
+                "status": "mock" if is_mock else "real_data",
+                "fields_returned": list(data.keys())[:10],
+                "sample": {k: str(v)[:50] for k, v in list(data.items())[:5]}
+            }
+        except Exception as e:
+            results[name] = {
+                "status": "error",
+                "error": str(e)
+            }
+
+    return {
+        "email": email,
+        "domain": domain,
+        "api_results": results
+    }
+
+
 @router.get("/status")
 async def api_status() -> dict:
     """
