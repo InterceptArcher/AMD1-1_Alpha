@@ -26,8 +26,10 @@ class Settings:
     ZOOMINFO_API_KEY: Optional[str] = os.getenv("ZOOMINFO_API_KEY")
     GNEWS_API_KEY: Optional[str] = os.getenv("GNEWS_API_KEY")  # deprecated, use Tavily
 
-    # LLM Configuration (Anthropic Haiku-class)
+    # LLM Configuration (multi-provider with fallback)
     ANTHROPIC_API_KEY: Optional[str] = os.getenv("ANTHROPIC_API_KEY")
+    OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
+    GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
     LLM_MODEL: str = "claude-3-5-haiku-20241022"  # Fast, cost-effective
     LLM_TIMEOUT: int = 30  # seconds (target <60s end-to-end)
 

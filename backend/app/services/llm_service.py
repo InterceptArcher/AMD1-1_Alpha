@@ -1,6 +1,6 @@
 """
 LLM Service: Generates personalization content (intro hook + CTA).
-Uses Claude Haiku for fast inference (target <30s latency).
+Multi-provider support with fallback: Anthropic → OpenAI → Gemini → mock.
 Implements structured output, validation, and retry logic.
 """
 
@@ -12,17 +12,36 @@ from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass
 
 import anthropic
-from anthropic import APIError, APITimeoutError, RateLimitError
+from anthropic import APIError as AnthropicAPIError, APITimeoutError as AnthropicTimeoutError, RateLimitError as AnthropicRateLimitError
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Try to import optional providers
+try:
+    import openai
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    logger.info("OpenAI not installed, skipping as fallback")
+
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    logger.info("Google Generative AI not installed, skipping as fallback")
+
 # Constants
-MAX_RETRIES = 3
+MAX_RETRIES = 2
 RETRY_DELAY_SECONDS = 1.0
-DEFAULT_MODEL = "claude-3-5-haiku-20241022"
-OPUS_MODEL = "claude-opus-4-5-20251101"
+
+# Model names per provider
+ANTHROPIC_MODEL = "claude-3-5-haiku-20241022"
+ANTHROPIC_OPUS = "claude-opus-4-5-20251101"
+OPENAI_MODEL = "gpt-4o-mini"
+GEMINI_MODEL = "gemini-1.5-flash"
 
 # Output constraints
 MAX_INTRO_LENGTH = 200  # characters
@@ -42,28 +61,147 @@ class PersonalizationResult:
 
 class LLMService:
     """
-    Generates personalized intro hook and CTA using Claude.
-    - Uses Haiku for speed (default)
-    - Falls back to Opus for complex cases
+    Generates personalized intro hook and CTA using LLMs.
+    Multi-provider support: Anthropic → OpenAI → Gemini → mock fallback.
+    - Tries providers in order until one succeeds
     - Implements structured output with JSON validation
     - Retry logic for transient failures
     """
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self):
         """
-        Initialize LLM service.
+        Initialize LLM service with all available providers.
+        Providers are tried in order: Anthropic → OpenAI → Gemini.
+        """
+        self.providers: List[Dict[str, Any]] = []
+
+        # Initialize Anthropic
+        if settings.ANTHROPIC_API_KEY:
+            try:
+                client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+                self.providers.append({
+                    "name": "anthropic",
+                    "client": client,
+                    "model": ANTHROPIC_MODEL
+                })
+                logger.info("Anthropic provider initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize Anthropic: {e}")
+
+        # Initialize OpenAI
+        if OPENAI_AVAILABLE and settings.OPENAI_API_KEY:
+            try:
+                client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
+                self.providers.append({
+                    "name": "openai",
+                    "client": client,
+                    "model": OPENAI_MODEL
+                })
+                logger.info("OpenAI provider initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize OpenAI: {e}")
+
+        # Initialize Gemini
+        if GEMINI_AVAILABLE and settings.GEMINI_API_KEY:
+            try:
+                genai.configure(api_key=settings.GEMINI_API_KEY)
+                self.providers.append({
+                    "name": "gemini",
+                    "client": genai,
+                    "model": GEMINI_MODEL
+                })
+                logger.info("Gemini provider initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize Gemini: {e}")
+
+        if not self.providers:
+            logger.warning("No LLM providers available - will use mock responses")
+        else:
+            logger.info(f"LLM service initialized with providers: {[p['name'] for p in self.providers]}")
+
+    def _call_provider(
+        self,
+        provider: Dict[str, Any],
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = 500
+    ) -> Optional[str]:
+        """
+        Call a specific LLM provider and return the response text.
 
         Args:
-            api_key: Anthropic API key. If None, use environment variable.
-        """
-        self.api_key = api_key or settings.ANTHROPIC_API_KEY
-        self.client = None
+            provider: Provider config dict with name, client, model
+            system_prompt: System prompt
+            user_prompt: User prompt
+            max_tokens: Max tokens for response
 
-        if self.api_key:
-            self.client = anthropic.Anthropic(api_key=self.api_key)
-            logger.info("LLM service initialized with Anthropic client")
-        else:
-            logger.warning("LLM service initialized without API key (mock mode)")
+        Returns:
+            Response text or None if failed
+        """
+        name = provider["name"]
+        client = provider["client"]
+        model = provider["model"]
+
+        try:
+            if name == "anthropic":
+                response = client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    messages=[{"role": "user", "content": user_prompt}],
+                    system=system_prompt
+                )
+                return response.content[0].text
+
+            elif name == "openai":
+                response = client.chat.completions.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ]
+                )
+                return response.choices[0].message.content
+
+            elif name == "gemini":
+                model_instance = client.GenerativeModel(model)
+                # Gemini combines system + user in one prompt
+                combined = f"{system_prompt}\n\n{user_prompt}"
+                response = model_instance.generate_content(combined)
+                return response.text
+
+        except Exception as e:
+            logger.warning(f"{name} provider failed: {type(e).__name__}: {e}")
+            return None
+
+        return None
+
+    def _call_with_fallback(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = 500
+    ) -> Tuple[Optional[str], str]:
+        """
+        Try each provider in order until one succeeds.
+
+        Args:
+            system_prompt: System prompt
+            user_prompt: User prompt
+            max_tokens: Max tokens
+
+        Returns:
+            Tuple of (response_text, provider_name) or (None, "none")
+        """
+        for provider in self.providers:
+            for attempt in range(MAX_RETRIES):
+                result = self._call_provider(provider, system_prompt, user_prompt, max_tokens)
+                if result:
+                    return result, provider["name"]
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(RETRY_DELAY_SECONDS)
+
+        return None, "none"
 
     async def generate_personalization(
         self,
@@ -73,79 +211,49 @@ class LLMService:
     ) -> Dict[str, str]:
         """
         Generate intro hook and CTA from normalized profile.
+        Uses multi-provider fallback: Anthropic → OpenAI → Gemini → mock.
 
         Args:
             normalized_profile: Normalized enrichment data
-            use_opus: Whether to use Opus model for richer output
+            use_opus: Whether to use Opus model (Anthropic only)
             user_context: User-provided context (goal, persona, industry)
 
         Returns:
             Dict with 'intro_hook', 'cta', and metadata
         """
-        if not self.client:
+        if not self.providers:
             return self._mock_response(normalized_profile, user_context)
 
         start_time = time.time()
-        model = OPUS_MODEL if use_opus else DEFAULT_MODEL
-
-        # Build the prompt with user context
         prompt = self._build_prompt(normalized_profile, user_context)
+        system_prompt = self._get_system_prompt()
 
-        # Try with retries
-        for attempt in range(MAX_RETRIES):
-            try:
-                response = self.client.messages.create(
-                    model=model,
-                    max_tokens=500,
-                    messages=[{"role": "user", "content": prompt}],
-                    system=self._get_system_prompt()
+        # Try with fallback
+        content, provider_name = self._call_with_fallback(system_prompt, prompt, max_tokens=500)
+
+        if content:
+            parsed = self._parse_response(content)
+
+            if parsed:
+                latency_ms = int((time.time() - start_time) * 1000)
+
+                result = {
+                    "intro_hook": parsed["intro_hook"],
+                    "cta": parsed["cta"],
+                    "model_used": provider_name,
+                    "tokens_used": 0,  # Not tracking across providers
+                    "latency_ms": latency_ms,
+                    "raw_response": {"content": content}
+                }
+
+                logger.info(
+                    f"Generated personalization: provider={provider_name}, latency={latency_ms}ms"
                 )
+                return result
 
-                # Parse response
-                content = response.content[0].text
-                parsed = self._parse_response(content)
-
-                if parsed:
-                    latency_ms = int((time.time() - start_time) * 1000)
-
-                    result = {
-                        "intro_hook": parsed["intro_hook"],
-                        "cta": parsed["cta"],
-                        "model_used": model,
-                        "tokens_used": response.usage.input_tokens + response.usage.output_tokens,
-                        "latency_ms": latency_ms,
-                        "raw_response": {"content": content}
-                    }
-
-                    logger.info(
-                        f"Generated personalization: model={model}, "
-                        f"tokens={result['tokens_used']}, latency={latency_ms}ms"
-                    )
-                    return result
-
-                # Parse failed, retry with fix prompt
-                if attempt < MAX_RETRIES - 1:
-                    logger.warning(f"Parse failed, retrying with fix prompt (attempt {attempt + 1})")
-                    prompt = self._build_fix_prompt(content)
-                    continue
-
-            except RateLimitError as e:
-                logger.warning(f"Rate limited, retrying in {RETRY_DELAY_SECONDS}s: {e}")
-                time.sleep(RETRY_DELAY_SECONDS * (attempt + 1))
-                continue
-
-            except APITimeoutError as e:
-                logger.warning(f"API timeout, retrying: {e}")
-                continue
-
-            except APIError as e:
-                logger.error(f"API error: {e}")
-                if attempt == MAX_RETRIES - 1:
-                    raise
-
-        # All retries failed, return fallback
-        logger.error("All retries failed, returning fallback response")
-        return self._fallback_response(normalized_profile)
+        # All providers failed, return mock response
+        logger.warning("All LLM providers failed, returning mock response")
+        return self._mock_response(normalized_profile, user_context)
 
     def _get_system_prompt(self) -> str:
         """Get the system prompt for personalization."""
@@ -457,6 +565,8 @@ No other text."""
         2. Case Study Framing - Context for why selected case study is relevant
         3. CTA - Based on buying stage and role
 
+        Uses multi-provider fallback: Anthropic → OpenAI → Gemini → mock.
+
         Args:
             profile: Normalized enrichment data
             user_context: User-provided context (goal, persona, industry)
@@ -465,37 +575,31 @@ No other text."""
         Returns:
             Dict with personalized_hook, case_study_framing, personalized_cta
         """
-        if not self.client:
+        if not self.providers:
             return self._mock_ebook_response(profile, user_context)
 
         user_context = user_context or {}
         start_time = time.time()
 
         prompt = self._build_ebook_prompt(profile, user_context, company_news)
+        system_prompt = self._get_ebook_system_prompt()
 
-        try:
-            response = self.client.messages.create(
-                model=DEFAULT_MODEL,
-                max_tokens=1000,
-                messages=[{"role": "user", "content": prompt}],
-                system=self._get_ebook_system_prompt()
-            )
+        # Try with fallback
+        content, provider_name = self._call_with_fallback(system_prompt, prompt, max_tokens=1000)
 
-            content = response.content[0].text
+        if content:
             parsed = self._parse_ebook_response(content)
 
             if parsed:
                 latency_ms = int((time.time() - start_time) * 1000)
-                parsed["model_used"] = DEFAULT_MODEL
-                parsed["tokens_used"] = response.usage.input_tokens + response.usage.output_tokens
+                parsed["model_used"] = provider_name
+                parsed["tokens_used"] = 0
                 parsed["latency_ms"] = latency_ms
-                logger.info(f"Generated ebook personalization: tokens={parsed['tokens_used']}, latency={latency_ms}ms")
+                logger.info(f"Generated ebook personalization: provider={provider_name}, latency={latency_ms}ms")
                 return parsed
 
-        except (RateLimitError, APITimeoutError, APIError) as e:
-            logger.error(f"LLM API error for ebook personalization: {e}")
-
-        # Fallback
+        # All providers failed
+        logger.warning("All LLM providers failed for ebook personalization, using mock")
         return self._mock_ebook_response(profile, user_context)
 
     def _get_ebook_system_prompt(self) -> str:
