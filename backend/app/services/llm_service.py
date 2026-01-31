@@ -621,45 +621,53 @@ No other text."""
         """System prompt for AMD ebook personalization."""
         return """You are a B2B marketing expert creating DEEPLY personalized content for AMD's enterprise AI readiness ebook.
 
-CRITICAL: You will receive rich enrichment data about the prospect - USE IT ALL. Generic content is a failure.
+CRITICAL REQUIREMENT: You MUST explicitly reference specific data points from the enrichment data. Generic content is UNACCEPTABLE.
 
 The ebook covers:
 - Three stages: Leaders (33% - fully modernized), Challengers (58% - in progress), Observers (9% - planning)
 - Modernization strategies: "modernize in place" vs "refactor and shift"
-- Case studies with real metrics: KT Cloud (AI/GPU cloud), Smurfit Westrock (25% cost reduction), PQR (security/automation)
-- AMD solutions: EPYC processors, Instinct accelerators, Pensando DPUs
+- Case studies: KT Cloud (AI/GPU cloud), Smurfit Westrock (25% cost reduction), PQR (security/automation)
 
-YOUR TASK: Generate 3 sections that feel individually crafted:
+YOUR TASK: Generate 3 sections with MANDATORY data references:
 
-1. PERSONALIZED_HOOK (2-3 sentences):
-   - If company news exists, weave it in naturally ("With [Company]'s recent [news], you're likely thinking about...")
-   - Match the seniority level (executives want strategic framing, engineers want technical depth)
-   - Address their SPECIFIC buying stage concerns
-   - Use their actual company name and industry
+1. PERSONALIZED_HOOK (2-3 sentences) - MUST include at least 2 of these:
+   ✓ Company name (REQUIRED - always use their actual company name)
+   ✓ A specific news headline or theme if provided (e.g., "With [Company]'s recent focus on [news theme]...")
+   ✓ Company size/employee count (e.g., "As a [X]-employee organization...")
+   ✓ Funding stage if known (e.g., "As a [Series B] company...")
+   ✓ Growth trajectory if known (e.g., "With [Company]'s [X%] growth...")
+   ✓ Their specific role/title (e.g., "As a [CTO]...")
 
-2. CASE_STUDY_FRAMING (2-3 sentences):
-   - Draw SPECIFIC parallels between the case study company and their company
-   - Highlight metrics that matter to their role (C-suite wants ROI, engineers want performance)
-   - Make them think "this could be us"
-   - Reference their company size or industry challenges if known
+2. CASE_STUDY_FRAMING (2-3 sentences) - MUST include:
+   ✓ The case study company name (KT Cloud, Smurfit Westrock, or PQR)
+   ✓ A specific metric from the case study (e.g., "25% cost reduction", "40% faster deployment")
+   ✓ A direct comparison to THEIR company (e.g., "Like [Company], [Case Study] faced...")
+   ✓ Reference to their industry or company size for relevance
 
-3. PERSONALIZED_CTA (1-2 sentences):
-   - Awareness stage → "Discover where [Company] stands on the modernization curve"
-   - Consideration stage → "See how organizations like [Company] are comparing solutions"
-   - Decision stage → "Get the ROI data to make a confident infrastructure decision"
-   - Implementation stage → "Access the technical playbook for your implementation"
+3. PERSONALIZED_CTA (1-2 sentences) - MUST include:
+   ✓ Their company name
+   ✓ Language matching their buying stage:
+     - Awareness: "discover", "understand", "explore"
+     - Consideration: "compare", "evaluate", "see how"
+     - Decision: "get the data", "validate", "confirm"
+     - Implementation: "access the playbook", "accelerate"
+
+FAILURE CONDITIONS (will be rejected):
+✗ Using generic phrases like "organizations like yours" instead of actual company name
+✗ Not mentioning any specific news, funding, or growth data when it's provided
+✗ Not naming the case study company
+✗ Not including specific metrics
 
 RULES:
-- NEVER be generic. If you can't personalize a detail, acknowledge it naturally.
 - No unsubstantiated claims ("guaranteed", "proven", "#1")
-- Sound consultative and helpful, like a trusted advisor
-- Use their actual data points - company name, title, industry, news
+- Sound consultative, not salesy
+- If a data point is missing, skip it - but USE what's available
 
 Output ONLY valid JSON:
 {
-  "personalized_hook": "Your deeply personalized opening...",
-  "case_study_framing": "Specific connection to their situation...",
-  "personalized_cta": "Role and stage-specific call to action..."
+  "personalized_hook": "Your personalized opening with explicit data references...",
+  "case_study_framing": "Case study connection with specific metrics and company comparison...",
+  "personalized_cta": "Stage-appropriate CTA with company name..."
 }"""
 
     def _build_ebook_prompt(
@@ -955,29 +963,82 @@ Output ONLY valid JSON:
             parts.append("Key angles: automation, security, operational excellence")
             parts.append("Metrics to highlight: Efficiency, security posture, automation ROI")
 
-        # === PERSONALIZATION INSTRUCTIONS ===
-        parts.append("\n=== PERSONALIZATION REQUIREMENTS ===")
-        parts.append("You have RICH DATA above. Use it to create highly specific content.")
-        parts.append("")
-        parts.append("1. HOOK: Reference SPECIFIC details from the data")
-        parts.append("   - If there's company news, weave in a specific headline or theme")
-        parts.append("   - Reference their company size, funding stage, or growth trajectory")
-        parts.append("   - Match tone to seniority (exec = strategic, engineer = technical)")
-        parts.append("   - If they have tech skills like Python/AWS/ML, acknowledge their technical depth")
-        parts.append("")
-        parts.append("2. CASE STUDY FRAMING: Draw SPECIFIC parallels")
-        parts.append(f"   - Connect case study company challenges to {company_name}'s situation")
-        parts.append("   - Use their company size/industry/funding stage for relevance")
-        parts.append("   - Highlight metrics that matter to their role")
-        parts.append("   - If news themes show AI/cloud interest, emphasize those outcomes")
-        parts.append("")
-        parts.append("3. CTA: Specific to buying stage AND data signals")
-        parts.append("   - If high growth rate: emphasize scaling solutions")
-        parts.append("   - If funded startup: ROI and competitive positioning")
-        parts.append("   - If established enterprise: modernization and efficiency")
-        parts.append("   - Match the commitment level to their buying stage")
+        # === BUILD MANDATORY DATA SUMMARY ===
+        # This tells the LLM exactly what data points it MUST use
+        parts.append("\n=== MANDATORY DATA TO REFERENCE ===")
+        parts.append("You MUST use these data points in your output:\n")
 
-        parts.append("\nGenerate highly personalized JSON now. Be SPECIFIC, reference actual data points.")
+        mandatory_items = []
+        mandatory_items.append(f"✓ COMPANY NAME: \"{company_name}\" (USE THIS EXACT NAME)")
+
+        # News - most important for personalization
+        if recent_news and isinstance(recent_news, list) and len(recent_news) > 0:
+            first_article = recent_news[0]
+            if isinstance(first_article, dict) and first_article.get('title'):
+                news_title = first_article.get('title', '')[:80]
+                mandatory_items.append(f"✓ RECENT NEWS: \"{news_title}\" - REFERENCE THIS IN THE HOOK")
+
+        if news_themes and isinstance(news_themes, list) and len(news_themes) > 0:
+            mandatory_items.append(f"✓ NEWS THEMES: {', '.join(news_themes[:3])} - WEAVE INTO HOOK")
+
+        # Company size/scale
+        if profile.get('employee_count'):
+            emp = profile.get('employee_count')
+            mandatory_items.append(f"✓ EMPLOYEE COUNT: {emp:,} employees - USE FOR SCALE CONTEXT" if isinstance(emp, int) else f"✓ EMPLOYEE COUNT: {emp} - USE FOR SCALE CONTEXT")
+        elif profile.get('company_size'):
+            mandatory_items.append(f"✓ COMPANY SIZE: {profile.get('company_size')} - USE FOR SCALE CONTEXT")
+
+        # Funding/growth
+        if profile.get('latest_funding_stage'):
+            mandatory_items.append(f"✓ FUNDING STAGE: {profile.get('latest_funding_stage')} - MENTION IN CONTEXT")
+        if profile.get('employee_growth_rate') and isinstance(profile.get('employee_growth_rate'), (int, float)):
+            growth = profile.get('employee_growth_rate')
+            if growth > 0:
+                mandatory_items.append(f"✓ GROWTH RATE: {growth:.0%} employee growth - REFERENCE AS 'RAPID GROWTH'")
+
+        # Person's role
+        if profile.get('title'):
+            mandatory_items.append(f"✓ THEIR TITLE: {profile.get('title')} - TAILOR TONE TO THIS ROLE")
+        if profile.get('seniority'):
+            mandatory_items.append(f"✓ SENIORITY: {profile.get('seniority')} - MATCH STRATEGIC VS TACTICAL")
+
+        # Industry
+        effective_industry = user_context.get('industry_input') or profile.get('industry', '')
+        if effective_industry:
+            mandatory_items.append(f"✓ INDUSTRY: {effective_industry} - USE INDUSTRY-SPECIFIC LANGUAGE")
+
+        # Buying stage
+        if goal:
+            mandatory_items.append(f"✓ BUYING STAGE: {goal.upper()} - MATCH CTA TO THIS STAGE")
+
+        for item in mandatory_items:
+            parts.append(item)
+
+        # Case study specifics
+        parts.append(f"\n✓ CASE STUDY TO REFERENCE: Use the case study selected above")
+        if case_study == 'healthcare':
+            parts.append("   - Name: PQR")
+            parts.append("   - Metric to cite: 40% faster threat detection, HIPAA compliance")
+        elif case_study == 'financial':
+            parts.append("   - Name: PQR")
+            parts.append("   - Metric to cite: 40% faster threat detection, regulatory compliance")
+        elif case_study == 'manufacturing':
+            parts.append("   - Name: Smurfit Westrock")
+            parts.append("   - Metric to cite: 25% cost reduction, 30% emissions reduction")
+        elif case_study == 'telecom_tech':
+            parts.append("   - Name: KT Cloud")
+            parts.append("   - Metric to cite: Massive scale AI/GPU deployment, cloud-native platform")
+        else:
+            parts.append("   - Name: PQR")
+            parts.append("   - Metric to cite: 40% efficiency gains, security automation")
+
+        parts.append("\n=== OUTPUT REQUIREMENTS ===")
+        parts.append("Your JSON output MUST:")
+        parts.append(f"1. personalized_hook: Start with \"{company_name}\" or reference their news/growth")
+        parts.append("2. case_study_framing: Name the case study company AND cite a specific metric")
+        parts.append(f"3. personalized_cta: Include \"{company_name}\" and match the {goal or 'awareness'} stage")
+        parts.append("\nGENERATE THE JSON NOW:")
+
         return "\n".join(parts)
 
     def _parse_ebook_response(self, content: str) -> Optional[Dict[str, str]]:
