@@ -1,7 +1,6 @@
 # Supabase configuration for local development and deployment
 
-[project]
-name = "amd1-1-alpha"
+# Project ID is linked via supabase link command
 
 [api]
 enabled = true
@@ -10,7 +9,7 @@ schemas = ["public"]
 
 [db]
 port = 54322
-major_version = 15
+major_version = 17
 
 [studio]
 enabled = true

@@ -357,7 +357,8 @@ async def api_status() -> dict:
     # Also check raw env vars to debug case sensitivity issues
     raw_env = {}
     for key in ["APOLLO_API_KEY", "Apollo_API_KEY", "HUNTER_API_KEY", "Hunter_API_KEY",
-                "PDL_API_KEY", "Pdl_API_KEY", "TAVILY_API_KEY", "Tavily_API_KEY"]:
+                "PDL_API_KEY", "Pdl_API_KEY", "GNEWS_API_KEY", "GNews_API_KEY",
+                "ZOOMINFO_API_KEY", "ZoomInfo_API_KEY"]:
         val = os.getenv(key)
         if val:
             raw_env[key] = f"set ({val[:4]}...)" if len(val) > 4 else "set (short)"
@@ -368,7 +369,7 @@ async def api_status() -> dict:
             "apollo": check_key("APOLLO_API_KEY"),
             "pdl": check_key("PDL_API_KEY"),
             "hunter": check_key("HUNTER_API_KEY"),
-            "tavily": check_key("TAVILY_API_KEY"),
+            "gnews": check_key("GNEWS_API_KEY"),
             "zoominfo": check_key("ZOOMINFO_API_KEY"),
         },
         "llm_providers": {

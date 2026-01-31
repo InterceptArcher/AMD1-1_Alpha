@@ -188,7 +188,8 @@ class PDFService:
 
         variables = {
             "first_name": profile.get("first_name", "Reader"),
-            "company_name": profile.get("company_name", "your company"),
+            "last_name": profile.get("last_name", ""),
+            "company_name": profile.get("company_name") or profile.get("company", "your company"),
             "title": profile.get("title", "Professional"),
             "industry": user_context.get("industry_input") or profile.get("industry", "your industry"),
             "generated_date": datetime.utcnow().strftime("%B %d, %Y"),
@@ -220,242 +221,649 @@ class PDFService:
         return template.safe_substitute(variables)
 
     def _get_amd_ebook_template(self) -> str:
-        """Get the AMD ebook HTML template."""
+        """Get the AMD ebook HTML template - matching official AMD design."""
         return '''<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>From Observers to Enterprise AI Readiness</title>
+    <title>An Enterprise AI Readiness Framework</title>
     <style>
-        @page { size: letter; margin: 0.75in; }
-        * { box-sizing: border-box; }
+        @page {
+            size: letter;
+            margin: 0;
+        }
+        @font-face {
+            font-family: 'AMD';
+            src: local('Segoe UI'), local('Helvetica Neue'), local('Arial');
+        }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
         body {
-            font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-            line-height: 1.6;
-            color: #1a1a2e;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-            font-size: 11pt;
+            font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.5;
+            color: #ffffff;
+            background: #0a0a12;
+            font-size: 10pt;
         }
-        h1 { font-size: 28pt; color: #ED1C24; margin-bottom: 10px; }
-        h2 { font-size: 18pt; color: #1a1a2e; border-bottom: 2px solid #ED1C24; padding-bottom: 8px; margin-top: 30px; }
-        h3 { font-size: 14pt; color: #ED1C24; margin-top: 20px; }
-        .cover {
-            text-align: center;
-            padding: 80px 20px;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            color: white;
+
+        /* AMD Brand Colors */
+        :root {
+            --amd-cyan: #00c8aa;
+            --amd-dark: #0a0a12;
+            --amd-darker: #050508;
+            --amd-gray: #1a1a2e;
+            --amd-light-gray: #8a8a9a;
+        }
+
+        /* Cover Page */
+        .cover-page {
+            min-height: 100vh;
+            background: linear-gradient(135deg, #0a0a12 0%, #0d1a2d 50%, #0a0a12 100%);
+            padding: 60px 50px;
+            position: relative;
             page-break-after: always;
-            border-radius: 8px;
         }
-        .cover h1 { color: white; font-size: 32pt; }
-        .cover .subtitle { font-size: 14pt; color: #aaa; margin-top: 20px; }
-        .cover .personalized-for {
-            margin-top: 40px;
-            padding: 20px;
-            background: rgba(237, 28, 36, 0.2);
-            border-radius: 8px;
-            border: 1px solid #ED1C24;
+        .amd-logo {
+            font-size: 24pt;
+            font-weight: bold;
+            letter-spacing: 2px;
+            margin-bottom: 200px;
         }
+        .cover-subtitle {
+            color: var(--amd-cyan);
+            font-size: 13pt;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 15px;
+        }
+        .cover-title {
+            font-size: 42pt;
+            font-weight: 800;
+            line-height: 1.1;
+            margin-bottom: 30px;
+            text-transform: uppercase;
+        }
+        .cover-personalized {
+            margin-top: 60px;
+            padding: 25px 30px;
+            background: rgba(0, 200, 170, 0.1);
+            border: 1px solid var(--amd-cyan);
+            border-radius: 4px;
+            max-width: 400px;
+        }
+        .cover-personalized-label {
+            font-size: 9pt;
+            color: var(--amd-cyan);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+        .cover-personalized-name {
+            font-size: 18pt;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+        .cover-personalized-role {
+            font-size: 11pt;
+            color: var(--amd-light-gray);
+        }
+
+        /* Content Pages */
+        .content-page {
+            background: var(--amd-dark);
+            padding: 50px;
+            min-height: 100vh;
+            page-break-after: always;
+        }
+        .content-page:last-child {
+            page-break-after: auto;
+        }
+
+        /* Section Headers */
+        .section-header {
+            margin-bottom: 30px;
+        }
+        .section-header h2 {
+            font-size: 26pt;
+            font-weight: 800;
+            line-height: 1.2;
+            margin-bottom: 20px;
+            text-transform: uppercase;
+        }
+        .section-header::before {
+            content: '';
+            display: block;
+            width: 60px;
+            height: 4px;
+            background: var(--amd-cyan);
+            margin-bottom: 25px;
+        }
+
+        /* Personalized Hook Section */
         .personalized-hook {
-            background: linear-gradient(135deg, #ED1C24 0%, #c41e24 100%);
-            color: white;
-            padding: 25px;
-            border-radius: 8px;
+            background: linear-gradient(135deg, rgba(0, 200, 170, 0.15) 0%, rgba(0, 200, 170, 0.05) 100%);
+            border-left: 4px solid var(--amd-cyan);
+            padding: 30px;
             margin: 30px 0;
             font-size: 12pt;
+            line-height: 1.6;
         }
-        .personalized-hook h3 { color: white; margin-top: 0; }
-        .section { page-break-inside: avoid; margin-bottom: 25px; }
-        .stats-box {
-            background: #f5f5f5;
-            padding: 20px;
-            border-left: 4px solid #ED1C24;
-            margin: 20px 0;
+        .personalized-hook-label {
+            color: var(--amd-cyan);
+            font-size: 10pt;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 12px;
         }
-        .stats-box .stat { font-size: 24pt; color: #ED1C24; font-weight: bold; }
-        .case-study {
-            background: #f8f9fa;
+
+        /* Statistics Grid */
+        .stats-grid {
+            display: flex;
+            justify-content: space-between;
+            gap: 30px;
+            margin: 40px 0;
+        }
+        .stat-item {
+            text-align: center;
+            flex: 1;
+        }
+        .stat-number {
+            font-size: 48pt;
+            font-weight: 300;
+            color: var(--amd-cyan);
+            line-height: 1;
+        }
+        .stat-suffix {
+            font-size: 24pt;
+            color: var(--amd-cyan);
+        }
+        .stat-label {
+            font-size: 9pt;
+            color: var(--amd-light-gray);
+            margin-top: 10px;
+            line-height: 1.4;
+        }
+
+        /* Info Boxes */
+        .info-box {
+            background: rgba(0, 200, 170, 0.08);
+            border: 1px solid rgba(0, 200, 170, 0.3);
             padding: 25px;
-            border-radius: 8px;
+            margin: 25px 0;
+        }
+        .info-box-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .info-box-icon {
+            width: 40px;
+            height: 40px;
+            border: 2px solid var(--amd-cyan);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 15px;
+            font-size: 16pt;
+        }
+        .info-box-title {
+            font-size: 12pt;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        /* Two Column Layout */
+        .two-column {
+            display: flex;
+            gap: 40px;
+        }
+        .column {
+            flex: 1;
+        }
+        .column-box {
+            background: rgba(0, 200, 170, 0.05);
+            border: 1px solid rgba(0, 200, 170, 0.2);
+            padding: 25px;
+            height: 100%;
+        }
+        .column-box h4 {
+            color: var(--amd-cyan);
+            font-size: 11pt;
+            font-weight: 700;
+            margin-bottom: 20px;
+            text-transform: uppercase;
+        }
+        .column-item {
+            margin-bottom: 20px;
+        }
+        .column-item-number {
+            color: var(--amd-cyan);
+            font-size: 14pt;
+            font-weight: 300;
+            margin-bottom: 5px;
+        }
+        .column-item-title {
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+        .column-item-text {
+            font-size: 9pt;
+            color: var(--amd-light-gray);
+            line-height: 1.5;
+        }
+
+        /* Case Study */
+        .case-study {
+            background: linear-gradient(180deg, #0d1a2d 0%, var(--amd-dark) 100%);
+            padding: 40px;
             margin: 30px 0;
-            border: 1px solid #e0e0e0;
             page-break-inside: avoid;
         }
-        .case-study-header {
-            background: #1a1a2e;
-            color: white;
-            padding: 15px 20px;
-            margin: -25px -25px 20px -25px;
-            border-radius: 8px 8px 0 0;
+        .case-study-label {
+            color: var(--amd-cyan);
+            font-size: 10pt;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+        }
+        .case-study-title {
+            font-size: 22pt;
+            font-weight: 800;
+            margin-bottom: 25px;
+            text-transform: uppercase;
         }
         .case-study-framing {
-            background: #fff3cd;
-            padding: 15px;
-            border-radius: 4px;
+            background: rgba(0, 200, 170, 0.1);
+            border-left: 4px solid var(--amd-cyan);
+            padding: 20px;
+            margin-bottom: 25px;
+            font-style: italic;
+        }
+        .case-study-framing strong {
+            color: var(--amd-cyan);
+            font-style: normal;
+        }
+
+        /* Quote Block */
+        .quote-block {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 30px 40px;
+            margin: 30px 0;
+            position: relative;
+        }
+        .quote-mark {
+            font-size: 72pt;
+            color: var(--amd-cyan);
+            opacity: 0.3;
+            position: absolute;
+            top: -10px;
+            left: 20px;
+            font-family: Georgia, serif;
+        }
+        .quote-text {
+            font-size: 14pt;
+            line-height: 1.6;
+            font-style: italic;
             margin-bottom: 20px;
-            border-left: 4px solid #ED1C24;
-            font-style: italic;
+            position: relative;
+            z-index: 1;
         }
-        .quote {
-            font-style: italic;
-            padding: 15px 20px;
-            background: white;
-            border-left: 4px solid #ED1C24;
-            margin: 15px 0;
+        .quote-author {
+            color: var(--amd-cyan);
+            font-weight: 700;
+            font-style: normal;
         }
-        .quote-author { font-weight: bold; color: #666; margin-top: 10px; }
+        .quote-role {
+            color: var(--amd-light-gray);
+            font-size: 10pt;
+        }
+
+        /* CTA Section */
         .cta-section {
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            color: white;
-            padding: 40px;
-            border-radius: 8px;
+            background: linear-gradient(135deg, #0d1a2d 0%, #0a2a3a 100%);
+            padding: 50px;
             text-align: center;
             margin-top: 40px;
-            page-break-inside: avoid;
         }
-        .cta-section h2 { color: white; border: none; }
-        .cta-section .personalized-cta {
-            font-size: 14pt;
-            margin: 20px 0;
-            padding: 20px;
-            background: rgba(237, 28, 36, 0.3);
-            border-radius: 8px;
+        .cta-title {
+            font-size: 20pt;
+            font-weight: 700;
+            margin-bottom: 20px;
+        }
+        .cta-personalized {
+            font-size: 12pt;
+            max-width: 600px;
+            margin: 0 auto 30px;
+            color: var(--amd-light-gray);
         }
         .cta-button {
             display: inline-block;
-            background: #ED1C24;
-            color: white;
+            background: var(--amd-cyan);
+            color: var(--amd-dark);
             padding: 15px 40px;
-            border-radius: 4px;
+            font-weight: 700;
+            text-transform: uppercase;
             text-decoration: none;
-            font-weight: bold;
-            margin-top: 15px;
+            letter-spacing: 1px;
+            transition: all 0.3s;
         }
-        .footer {
-            text-align: center;
+
+        /* Footer Navigation */
+        .page-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-top: 30px;
             margin-top: 40px;
-            padding-top: 20px;
-            border-top: 1px solid #ddd;
-            font-size: 9pt;
-            color: #666;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            font-size: 8pt;
+            color: var(--amd-light-gray);
         }
-        .amd-logo { color: #ED1C24; font-weight: bold; font-size: 16pt; }
-        ul { padding-left: 20px; }
-        li { margin-bottom: 8px; }
-        .two-col { display: flex; gap: 20px; }
-        .two-col > div { flex: 1; }
+        .footer-nav {
+            display: flex;
+            gap: 30px;
+        }
+        .footer-nav-item {
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .footer-nav-item.active {
+            color: var(--amd-cyan);
+            font-weight: 700;
+        }
+        .page-number {
+            font-size: 10pt;
+        }
+
+        /* Paragraph Styles */
+        p {
+            margin-bottom: 15px;
+            color: #d0d0d8;
+        }
+        strong {
+            color: #ffffff;
+        }
+
+        /* List Styles */
+        ul {
+            margin: 15px 0;
+            padding-left: 20px;
+        }
+        li {
+            margin-bottom: 10px;
+            color: #d0d0d8;
+        }
+        li::marker {
+            color: var(--amd-cyan);
+        }
     </style>
 </head>
 <body>
     <!-- COVER PAGE -->
-    <div class="cover">
+    <div class="cover-page">
         <div class="amd-logo">AMD</div>
-        <h1>FROM OBSERVERS TO<br>ENTERPRISE AI READINESS</h1>
-        <p class="subtitle">A Strategic Guide to Data Center Modernization</p>
-        <div class="personalized-for">
-            <p>Prepared for</p>
-            <p style="font-size: 18pt; font-weight: bold;">$first_name</p>
-            <p>$title at $company_name</p>
-            <p style="margin-top: 15px; font-size: 10pt;">$generated_date</p>
+        <div class="cover-subtitle">From Observers to Leaders</div>
+        <h1 class="cover-title">An<br>Enterprise<br>AI Readiness<br>Framework</h1>
+        <div class="cover-personalized">
+            <div class="cover-personalized-label">Prepared Exclusively For</div>
+            <div class="cover-personalized-name">$first_name $last_name</div>
+            <div class="cover-personalized-role">$title at $company_name</div>
         </div>
     </div>
 
-    <!-- PERSONALIZED HOOK -->
-    <div class="personalized-hook">
-        <h3>A Message For You</h3>
-        <p>$personalized_hook</p>
+    <!-- TABLE OF CONTENTS -->
+    <div class="content-page">
+        <div class="section-header">
+            <h2>Table of Contents</h2>
+        </div>
+        <div class="stats-grid" style="margin-top: 50px;">
+            <div class="stat-item">
+                <div class="stat-number">3</div>
+                <div class="stat-label"><strong>Redefining the Data Center</strong><br>AI Readiness in the Age of Acceleration</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">4</div>
+                <div class="stat-label"><strong>Understanding the Three Stages</strong><br>Data Center Modernization Framework</div>
+            </div>
+        </div>
+        <div class="stats-grid">
+            <div class="stat-item">
+                <div class="stat-number">8</div>
+                <div class="stat-label"><strong>The Path to Leadership</strong><br>Moving Through the Stages</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">9</div>
+                <div class="stat-label"><strong>Modernization in Action</strong><br>Customer Success Snapshots</div>
+            </div>
+        </div>
+        <div class="stats-grid" style="justify-content: flex-start;">
+            <div class="stat-item" style="flex: 0 0 auto;">
+                <div class="stat-number">15</div>
+                <div class="stat-label"><strong>Why AMD</strong><br>Your Strategic Partner for AI Modernization</div>
+            </div>
+        </div>
     </div>
 
-    <!-- INTRO SECTION -->
-    <div class="section">
-        <h2>Redefining the Data Center: AI Readiness in the Age of Acceleration</h2>
+    <!-- PERSONALIZED INTRO -->
+    <div class="content-page">
+        <div class="section-header">
+            <h2>Redefining the Data Center:<br>AI Readiness in the Age of Acceleration</h2>
+        </div>
+
+        <div class="personalized-hook">
+            <div class="personalized-hook-label">A Message for $first_name</div>
+            <p style="margin: 0; color: white;">$personalized_hook</p>
+        </div>
+
         <p>$intro_section</p>
-        <div class="stats-box">
-            <span class="stat">97%</span>
-            <p>of data center capacity was occupied as of March 2023 in top North American markets.</p>
+
+        <div class="stats-grid" style="margin-top: 50px;">
+            <div class="stat-item">
+                <div class="stat-number">97<span class="stat-suffix">%</span></div>
+                <div class="stat-label">of the data center capacity was occupied as of March 2023 in the top North American markets.</div>
+            </div>
         </div>
     </div>
 
     <!-- THREE STAGES -->
-    <div class="section">
-        <h2>Understanding the Three Stages of Data Center Modernization</h2>
+    <div class="content-page">
+        <div class="section-header">
+            <h2>Understanding the Three Stages of<br>Data Center Modernization</h2>
+        </div>
+
         <p>$three_stages_intro</p>
+
+        <div class="stats-grid" style="margin-top: 40px;">
+            <div class="stat-item">
+                <div class="stat-number">33<span class="stat-suffix">%</span></div>
+                <div class="stat-label">of organizations—<br><strong>data center Leaders</strong>—<br>have fully modernized in the past two years</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">58<span class="stat-suffix">%</span></div>
+                <div class="stat-label">of organizations—<br><strong>data center Challengers</strong>—<br>are currently undertaking modernization initiatives</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number">9<span class="stat-suffix">%</span></div>
+                <div class="stat-label">of organizations—<br><strong>data center Observers</strong>—<br>plan to modernize within the next two years</div>
+            </div>
+        </div>
     </div>
 
-    <div class="section">
-        <h3>Data Center Leaders (26%)</h3>
+    <!-- LEADERS SECTION -->
+    <div class="content-page">
+        <div class="section-header">
+            <h2>Data Center Leaders</h2>
+        </div>
+
         <p>$leaders_section</p>
+
+        <div class="two-column" style="margin-top: 30px;">
+            <div class="column">
+                <div class="column-box">
+                    <h4>Advantages for Leaders</h4>
+                    <div class="column-item">
+                        <div class="column-item-number">01</div>
+                        <div class="column-item-title">Efficiencies</div>
+                        <div class="column-item-text">They can reduce operational costs by allocating more time and budget to innovation rather than system maintenance.</div>
+                    </div>
+                    <div class="column-item">
+                        <div class="column-item-number">02</div>
+                        <div class="column-item-title">Agility and competitive advantage</div>
+                        <div class="column-item-text">AI helps widen the gap between the competition through enhanced decision-making, customer experiences, and innovative products.</div>
+                    </div>
+                </div>
+            </div>
+            <div class="column">
+                <div class="column-box">
+                    <h4>Risks</h4>
+                    <div class="column-item">
+                        <div class="column-item-number">01</div>
+                        <div class="column-item-title">Unforeseen costs</div>
+                        <div class="column-item-text">The top reason organizations overspend on digital infrastructure is technical debt.</div>
+                    </div>
+                    <div class="column-item">
+                        <div class="column-item-number">02</div>
+                        <div class="column-item-title">Integration challenges</div>
+                        <div class="column-item-text">Integration is the most significant technical challenge for AI adoption across all organizations.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <div class="section">
-        <h3>Data Center Challengers (32%)</h3>
+    <!-- CHALLENGERS & OBSERVERS -->
+    <div class="content-page">
+        <div class="section-header">
+            <h2>Data Center Challengers</h2>
+        </div>
+
         <p>$challengers_section</p>
-    </div>
 
-    <div class="section">
-        <h3>Data Center Observers (42%)</h3>
-        <p>$observers_section</p>
+        <div style="margin-top: 50px;">
+            <div class="section-header">
+                <h2>Data Center Observers</h2>
+            </div>
+            <p>$observers_section</p>
+        </div>
     </div>
 
     <!-- PATH TO LEADERSHIP -->
-    <div class="section">
-        <h2>The Path to Leadership: Moving Through the Stages</h2>
+    <div class="content-page">
+        <div class="section-header">
+            <h2>The Path to Leadership:<br>Moving Through the Stages</h2>
+        </div>
+
         <p>$path_to_leadership</p>
+
+        <div class="info-box" style="margin-top: 30px;">
+            <div class="info-box-header">
+                <div class="info-box-icon">⚙</div>
+                <div class="info-box-title">Overcoming Barriers</div>
+            </div>
+            <p style="margin: 0;">As AI technology matures and organizations gain more experience, some early challenges are being solved. But significant barriers to adoption remain, including legacy infrastructure, skill gaps, and data security concerns.</p>
+        </div>
     </div>
 
-    <div class="section">
-        <h2>Modernization Models</h2>
+    <!-- MODERNIZATION MODELS -->
+    <div class="content-page">
+        <div class="section-header">
+            <h2>Modernization Models</h2>
+        </div>
+
         <p>$modernization_models</p>
+
+        <div class="two-column" style="margin-top: 30px;">
+            <div class="column">
+                <div class="column-box">
+                    <h4>Factors Driving In-Place Modernization</h4>
+                    <ul>
+                        <li>Lower capital expenditures</li>
+                        <li>More predictable costs</li>
+                        <li>Better control over sensitive data</li>
+                        <li>Optimized existing investments</li>
+                        <li>Reduced operational risk</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="column">
+                <div class="column-box">
+                    <h4>Factors Driving Refactor-and-Shift</h4>
+                    <ul>
+                        <li>Accelerated innovation</li>
+                        <li>Agile development</li>
+                        <li>Faster AI tool integration</li>
+                        <li>More efficient scalability</li>
+                        <li>Personalized customer experiences</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <!-- PERSONALIZED CASE STUDY -->
-    <div class="case-study">
-        <div class="case-study-header">
-            <h3 style="margin: 0; color: white;">Customer Success: $case_study_company</h3>
-            <p style="margin: 5px 0 0 0; font-size: 10pt; opacity: 0.8;">$case_study_industry</p>
+    <!-- CASE STUDY -->
+    <div class="content-page">
+        <div class="case-study">
+            <div class="case-study-label">Case Study</div>
+            <h3 class="case-study-title">$case_study_title</h3>
+
+            <div class="case-study-framing">
+                <strong>Why this matters for $company_name:</strong><br>
+                $case_study_framing
+            </div>
+
+            <p><strong>The Challenge:</strong> $case_study_challenge</p>
+            <p><strong>The Solution:</strong> $case_study_solution</p>
+
+            <div class="quote-block">
+                <div class="quote-mark">"</div>
+                <div class="quote-text">$case_study_quote</div>
+                <div class="quote-author">$case_study_quote_author</div>
+            </div>
+
+            <p><strong>The Result:</strong> $case_study_result</p>
         </div>
-        <div class="case-study-framing">
-            <strong>Why this matters for $company_name:</strong><br>
-            $case_study_framing
-        </div>
-        <p><strong>The Challenge:</strong> $case_study_challenge</p>
-        <p><strong>The Solution:</strong> $case_study_solution</p>
-        <div class="quote">
-            "$case_study_quote"
-            <div class="quote-author">— $case_study_quote_author</div>
-        </div>
-        <p><strong>The Result:</strong> $case_study_result</p>
     </div>
 
-    <!-- ASSESSMENT -->
-    <div class="section">
-        <h2>Where Do You Stand on the Modernization Curve?</h2>
+    <!-- ASSESSMENT QUESTIONS -->
+    <div class="content-page">
+        <div class="section-header">
+            <h2>Where Do You Stand on the<br>Modernization Curve?</h2>
+        </div>
+
         <p>$assessment_questions</p>
     </div>
 
     <!-- WHY AMD -->
-    <div class="section">
-        <h2>Why AMD: Your Strategic Partner</h2>
-        <p>$why_amd</p>
-    </div>
-
-    <!-- PERSONALIZED CTA -->
-    <div class="cta-section">
-        <h2>Ready to Take the Next Step?</h2>
-        <div class="personalized-cta">
-            $personalized_cta
+    <div class="content-page">
+        <div class="section-header">
+            <h2>Why AMD: Your Strategic Partner<br>for Data Center and AI Modernization</h2>
         </div>
-        <a href="https://www.amd.com/en/solutions/data-center.html" class="cta-button">Explore AMD AI Solutions</a>
-    </div>
 
-    <!-- FOOTER -->
-    <div class="footer">
-        <p>This guide was personalized for $first_name at $company_name</p>
-        <p>Generated on $generated_date</p>
-        <p style="margin-top: 15px;">© 2025 Advanced Micro Devices, Inc.</p>
+        <p>$why_amd</p>
+
+        <div class="cta-section">
+            <div class="cta-title">Ready to Accelerate Your AI Journey?</div>
+            <div class="cta-personalized">$personalized_cta</div>
+            <a href="https://www.amd.com/en/solutions/data-center.html" class="cta-button">Explore AMD AI Solutions →</a>
+        </div>
+
+        <div class="page-footer">
+            <div style="font-size: 9pt;">
+                <p style="margin: 0;">Personalized for <strong>$first_name</strong> at <strong>$company_name</strong></p>
+                <p style="margin: 5px 0 0 0;">Generated on $generated_date</p>
+            </div>
+            <div style="font-size: 8pt; color: var(--amd-light-gray);">
+                © 2025 Advanced Micro Devices, Inc.
+            </div>
+        </div>
     </div>
 </body>
 </html>'''
